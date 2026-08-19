@@ -1,0 +1,1 @@
+epoch,loss_total,loss_rgb,loss_intensity,loss_hv,loss_chroma,loss_hue,loss_grad,loss_curve_smooth,loss_color_delta,loss_ssim,grad_norm,curve_abs_mean,delta_hv_abs_mean,train_high_clip_fraction,hvi_k,color_mode,lr,epoch_seconds,val_psnr,val_ssim,val_intensity_mae,val_chroma_mae,val_high_clip_fraction,val_seconds,best_psnr,best_ssim,best_chroma_mae
