@@ -43,7 +43,7 @@ def get_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/home/unicornio/User/LCWNet/results/LCWHVINet",
+        default="/home/unicornio/User/LCWNetV2/results/LCWHVINet",
     )
     parser.add_argument("--recursive", action="store_true")
     parser.add_argument("--suffix", type=str, default="_LCWHVI")
@@ -70,7 +70,7 @@ def get_args():
     parser.add_argument(
         "--device",
         type=str,
-        default="cuda",
+        default="cpu",
         choices=["cuda", "cpu"],
     )
     parser.add_argument(

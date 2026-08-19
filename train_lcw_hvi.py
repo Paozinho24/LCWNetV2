@@ -47,10 +47,24 @@ def get_args():
     parser.add_argument("--val_gt_path", type=str, default="")
     parser.add_argument("--recursive_dataset", action="store_true")
     parser.add_argument("--patch_size", type=int, default=128)
-    parser.add_argument("--patches_per_image", type=int, default=16)
+    parser.add_argument(
+        "--patches_per_image",
+        type=int,
+        default=0,
+        help=(
+            "quantidade virtual de crops por imagem; "
+            "0 usa automaticamente 1 para LSD/PAMAZONIA e 16 para LOL"
+        ),
+    )
     parser.add_argument("--disable_augmentation", action="store_true")
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--num_workers", type=int, default=8)
+    parser.add_argument(
+        "--log_interval",
+        type=int,
+        default=100,
+        help="mostra o progresso a cada N batches",
+    )
 
     # Validação.
     parser.add_argument("--val_every", type=int, default=1)
@@ -121,8 +135,12 @@ def validate_args(args):
         raise ValueError("channels precisa ser divisível por num_heads.")
     if args.depth <= 0:
         raise ValueError("depth precisa ser maior que zero.")
-    if args.patch_size <= 0 or args.patches_per_image <= 0:
-        raise ValueError("patch_size e patches_per_image precisam ser maiores que zero.")
+    if args.patch_size <= 0:
+        raise ValueError("patch_size precisa ser maior que zero.")
+    if args.patches_per_image < 0:
+        raise ValueError("patches_per_image não pode ser negativo.")
+    if args.log_interval <= 0:
+        raise ValueError("log_interval precisa ser maior que zero.")
     if args.batch_size <= 0 or args.epochs <= 0:
         raise ValueError("batch_size e epochs precisam ser maiores que zero.")
     if args.lr <= 0 or args.min_lr < 0 or args.min_lr > args.lr:
@@ -242,11 +260,11 @@ def reduce_train_statistics(
 # Executa uma época de treinamento.
 def train_one_epoch(
     model, device, train_loader, optimizer, scheduler,
-    criterion, epoch, rank, grad_clip,
+    criterion, epoch, rank, grad_clip, log_interval,
 ):
     model.train()
     total_batches = len(train_loader)
-    log_interval = max(1, total_batches // 10)
+    log_interval = max(1, int(log_interval))
 
     metric_sums = {key: 0.0 for key in LOSS_KEYS}
     sample_count = 0
@@ -337,7 +355,7 @@ def train_one_epoch(
                 f"Curve {curve_abs:.5f} | "
                 f"DeltaHV {delta_abs:.5f} | "
                 f"GradNorm {grad_norm:.4f} | "
-                f"LR {lr:.8f} | "
+                f"LR {lr:.3e} | "
                 f"Data {data_time:.3f}s | "
                 f"Batch {batch_time:.3f}s",
                 flush=True,
@@ -732,6 +750,15 @@ def append_csv(
 
 def main():
     args = get_args()
+
+    # LSD/PAMAZONIA já são armazenados como patches prontos.
+    # LOL usa imagens maiores e pode gerar vários crops virtuais por imagem.
+    if args.patches_per_image == 0:
+        if args.dataset_name in {"lsd", "pamazonia"}:
+            args.patches_per_image = 1
+        else:
+            args.patches_per_image = 16
+
     validate_args(args)
 
     # Configurações de desempenho para A100/Ampere.
@@ -760,6 +787,18 @@ def main():
             if torch.cuda.is_available()
             else torch.device("cpu")
         )
+
+        if (
+            rank == 0
+            and torch.cuda.is_available()
+            and torch.cuda.device_count() > 1
+            and world_size == 1
+        ):
+            print(
+                "[AVISO] Mais de uma GPU está visível, mas o treinamento não está em DDP. "
+                "Execute com torchrun --standalone --nproc_per_node=N.",
+                flush=True,
+            )
 
         # 2. Dataset unificado.
         train_dataset, val_dataset, dataset_paths = build_datasets_from_args(args)
@@ -879,10 +918,13 @@ def main():
             print(f"Pares treino:          {len(train_dataset.pairs)}")
             print(f"Pares validação:       {len(val_dataset.pairs)}")
             print(f"Amostras/época:        {len(train_dataset)}")
+            print(f"Patches por imagem:    {args.patches_per_image}")
             print(f"Patch:                 {args.patch_size}x{args.patch_size}")
             print(f"Batch/GPU:             {args.batch_size}")
             print(f"Batch global:          {args.batch_size * world_size}")
-            print(f"GPUs:                  {world_size}")
+            print(f"GPUs/processos DDP:    {world_size}")
+            print(f"GPUs CUDA visíveis:    {torch.cuda.device_count() if torch.cuda.is_available() else 0}")
+            print(f"Log a cada:            {args.log_interval} batches")
             print(f"Channels:              {args.channels}")
             print(f"Depth:                 {args.depth}")
             print(f"Heads:                 {args.num_heads}")
@@ -920,7 +962,7 @@ def main():
 
             train_metrics = train_one_epoch(
                 model, device, train_loader, optimizer, scheduler,
-                criterion, epoch, rank, args.grad_clip,
+                criterion, epoch, rank, args.grad_clip, args.log_interval,
             )
 
             optimizer.zero_grad(set_to_none=True)

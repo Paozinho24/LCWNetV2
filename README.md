@@ -100,14 +100,6 @@ A estrutura recomendada do projeto é:
 |-- train_lcw_hvi.py
 `-- infer_lcw_hvi.py
 
-Os scripts de execução podem ser mantidos em:
-
-/home/unicornio/User/gpuFarm/
-|
-|-- train_lcw_hvi.sh
-|-- infer_lcw_hvi.sh
-|-- train_lcw_hvi.slurm
-`-- infer_lcw_hvi.slurm
 
 5. Dependências
 
