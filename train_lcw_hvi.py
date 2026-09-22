@@ -4,6 +4,7 @@ import math
 import os
 import random
 import time
+from tokenize import group
 
 import numpy as np
 import torch
@@ -13,6 +14,8 @@ import torch.optim as optim
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+
 
 from models.lcw_hvi_backbone import LCWHVINet
 from models.loss_hvi import LCWHVITotalLoss
@@ -53,7 +56,7 @@ def get_args():
         default=0,
         help=(
             "quantidade virtual de crops por imagem; "
-            "0 usa automaticamente 1 para LSD/PAMAZONIA e 16 para LOL"
+            "0 usa automaticamente 1 para LSD e 16 para LOL"
         ),
     )
     parser.add_argument("--disable_augmentation", action="store_true")
@@ -115,6 +118,10 @@ def get_args():
     parser.add_argument("--beta2", type=float, default=0.999)
     parser.add_argument("--warmup_epochs", type=int, default=5)
     parser.add_argument("--grad_clip", type=float, default=1.0)
+    
+    # Cosine Annealing Warm Restarts
+    parser.add_argument("--restart_cycle", type=int, default=60)
+    parser.add_argument("--restart_decay", type=float, default=1.0)
 
     # Checkpoints.
     parser.add_argument(
@@ -188,24 +195,105 @@ def seed_worker(worker_id):
     random.seed(worker_seed)
 
 
-# Warmup linear seguido de cosine decay.
-def build_scheduler(optimizer, epochs, steps_per_epoch, warmup_epochs, base_lr, min_lr):
-    total_steps = max(1, epochs * steps_per_epoch)
-    warmup_steps = max(0, warmup_epochs * steps_per_epoch)
-    min_factor = min_lr / base_lr
+# # Warmup linear seguido de cosine decay.
+# def build_scheduler(
+#     optimizer,
+#     epochs,
+#     steps_per_epoch,
+#     warmup_epochs,
+#     base_lr,
+#     min_lr,
+# ):
+#     total_steps = max(1, epochs * steps_per_epoch)
+#     warmup_steps = max(0, warmup_epochs * steps_per_epoch)
 
-    def lr_factor(step):
-        if warmup_steps > 0 and step < warmup_steps:
-            return float(step + 1) / float(warmup_steps)
+#     min_factor = min_lr / base_lr
+#     warmup_start_factor = 0.1
 
-        cosine_steps = max(1, total_steps - warmup_steps)
-        progress = float(step - warmup_steps) / float(cosine_steps)
-        progress = min(max(progress, 0.0), 1.0)
-        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
-        return min_factor + (1.0 - min_factor) * cosine
+#     def lr_factor(step):
+#         if warmup_steps > 0 and step < warmup_steps:
 
-    return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_factor)
+#             progress = step / max(1, warmup_steps - 1)
 
+#             return (
+#                 warmup_start_factor
+#                 + progress * (1.0 - warmup_start_factor)
+#             )
+
+#         cosine_steps = max(1, total_steps - warmup_steps)
+
+#         progress = (
+#             step - warmup_steps
+#         ) / cosine_steps
+
+#         progress = min(
+#             max(progress, 0.0),
+#             1.0,
+#         )
+
+#         cosine = 0.5 * (
+#             1.0
+#             + math.cos(math.pi * progress)
+#         )
+
+#         return (
+#             min_factor
+#             + (1.0 - min_factor) * cosine
+#         )
+
+#     return optim.lr_scheduler.LambdaLR(
+#         optimizer,
+#         lr_lambda=lr_factor,
+#     )
+
+
+class ConsineAnnelingWarmRestartsDecay(CosineAnnealingWarmRestarts):
+    def __init__(self, optimizer, T_0, T_mult=1, eta_min=0, last_epoch=-1, decay=1):
+        
+        self.decay = float(decay)
+        self.initial_lrs  = [
+            group["lr"] 
+            for group in optimizer.param_groups
+        ]
+        super().__init__(optimizer, T_0=T_0, T_mult=T_mult, eta_min=eta_min, last_epoch=last_epoch)
+        
+        def step (self, epoch=None):
+            if epoch is None:
+                if epoch < 0:
+                    raise ValueError(f"Epoca deve ser maior ou igual a zero, mas epoch={epoch} foi fornecido.")
+                
+                if epoch >= self.T_0:
+                    if self.T_mult == 1:
+                        cycle_number = int(epoch // self.T_0)
+                    else:
+                        cycle_number = int(
+                            math.log(
+                                epoch / self.T_0 * (self.T_mult - 1) + 1,
+                                self.T_mult,
+                            )
+                    )
+                else: 
+                    cycle_number = 0
+                
+                self.base_lrs = [
+                    initial_lr * (self.decay ** cycle_number)
+                    for initial_lr in self.initial_lrs
+                ]
+            else: 
+                # Necessário para funcionamento interno
+                # do scheduler durante inicialização.
+                if (
+                    hasattr(self, "T_cur")
+                    and hasattr(self, "T_i")
+                    and self.T_cur + 1 == self.T_i
+                ):
+
+                    self.base_lrs = [
+                        base_lr * self.decay
+                        for base_lr in self.base_lrs
+                    ]
+            super().step(epoch)
+            
 
 def get_model_module(model):
     return model.module if hasattr(model, "module") else model
@@ -315,7 +403,21 @@ def train_one_epoch(
         optimizer.step()
 
         if scheduler is not None:
-            scheduler.step()
+
+            epoch_progress = (
+                epoch
+                + (batch_idx + 1)
+                / total_batches
+            )
+
+            scheduler.step(
+                epoch_progress
+            )
+
+        # optimizer.step()
+
+        # if scheduler is not None:
+        #     scheduler.step()
 
         batch_size = input_img.size(0)
         sample_count += batch_size
@@ -871,14 +973,23 @@ def main():
         )
 
         # 6. Scheduler.
-        scheduler = build_scheduler(
+        scheduler = ConsineAnnelingWarmRestartsDecay(
             optimizer,
-            args.epochs,
-            len(train_loader),
-            args.warmup_epochs,
-            args.lr,
-            args.min_lr,
+            T_0=args.restart_cycle,
+            T_mult=1,
+            eta_min=args.min_lr,
+            decay=args.restart_decay,
         )
+        
+        
+        # scheduler = build_scheduler(
+        #     optimizer,
+        #     args.epochs,
+        #     len(train_loader),
+        #     args.warmup_epochs,
+        #     args.lr,
+        #     args.min_lr,
+        # )
 
         # 7. Checkpoints e resume.
         os.makedirs(args.checkpoints_dir, exist_ok=True)

@@ -1,11 +1,11 @@
 import math
 import torch
+import torchvision.ops as ops
 import torch.nn as nn
 import torch.nn.functional as F
 
-# ============================================================================
-# LCW-HVI-Restormer
-# ============================================================================
+
+
 # Ideia principal:
 # 1. A imagem RGB entra no intervalo [0,1].
 # 2. RGB e convertido para HVI, separando cor (H,V) e intensidade (I).
@@ -16,13 +16,6 @@ import torch.nn.functional as F
 # 7. A cor pode ficar travada ou receber apenas uma pequena correcao limitada.
 # 8. HVI e convertido novamente para RGB e limitado a [0,1].
 #
-# Diferencas para a LCWSwinNet antiga:
-# - nao existe base RGB livre;
-# - nao existe residual RGB livre;
-# - nao existe window partition/shifted window;
-# - nao existe downscaling no caminho de reconstrucao;
-# - luminosidade e cor sao tratadas separadamente.
-# ============================================================================
 
 
 
@@ -296,12 +289,12 @@ class IntensityWaveletBranch(nn.Module):
         self.dwt = HaarDWT()
         self.band_fusion = nn.Sequential(
             nn.Conv2d(4, channels, 3, padding=1),
-            nn.GELU(),
+            nn.PReLU(num_parameters=channels),
             nn.Conv2d(channels, channels, 3, padding=1),
         )
         self.refine = nn.Sequential(
             nn.Conv2d(channels, channels, 3, padding=1),
-            nn.GELU(),
+            nn.PReLU(num_parameters=channels),
             nn.Conv2d(channels, channels, 3, padding=1),
         )
 
@@ -314,10 +307,85 @@ class IntensityWaveletBranch(nn.Module):
             intensity = F.pad(intensity, (0, pad_w, 0, pad_h), mode=mode)
 
         ll, lh, hl, hh = self.dwt(intensity)
+        
         wave = self.band_fusion(torch.cat([ll, lh, hl, hh], dim=1))
         wave = F.interpolate(wave, size=intensity.shape[-2:], mode="bilinear", align_corners=False)
         wave = self.refine(wave)
         return wave[:, :, :h0, :w0]
+
+
+class CrossBranchFusion(nn.Module):
+    def __init__(
+        self,
+        channels,
+        scale=0.1
+    ):
+        super().__init__()
+
+        self.scale = float(scale)
+
+        # Intensidade -> cor
+        self.intensity_to_color = nn.Conv2d(
+            channels,
+            channels,
+            kernel_size=1
+        )
+
+        # Cor -> intensidade
+        self.color_to_intensity = nn.Conv2d(
+            channels,
+            channels,
+            kernel_size=1
+        )
+
+        # A interação começa desligada
+        nn.init.zeros_(
+            self.intensity_to_color.weight
+        )
+
+        nn.init.zeros_(
+            self.intensity_to_color.bias
+        )
+
+        nn.init.zeros_(
+            self.color_to_intensity.weight
+        )
+
+        nn.init.zeros_(
+            self.color_to_intensity.bias
+        )
+
+    def forward(
+        self,
+        color_feat,
+        intensity_feat
+    ):
+
+        # Intensidade influencia cor
+        color_update = (
+            self.intensity_to_color(
+                intensity_feat
+            )
+        )
+
+        # Cor influencia intensidade
+        intensity_update = (
+            self.color_to_intensity(
+                color_feat
+            )
+        )
+
+        color_feat = (color_feat + self.scale * color_update
+        )
+
+        intensity_feat = (intensity_feat + self.scale * intensity_update
+        )
+
+        return (
+            color_feat,
+            intensity_feat
+        )
+
 
 
 
@@ -325,24 +393,78 @@ class IntensityWaveletBranch(nn.Module):
 # As convolucoes de troca comecam em zero, entao a arquitetura inicia com
 # os dois ramos praticamente desacoplados e aprende a interacao gradualmente.
 
-class CrossBranchFusion(nn.Module):
-    def __init__(self, channels, scale=0.1):
+class DeformableResidualBlock(nn.Module):
+    def __init__(self, channels):
         super().__init__()
-        self.scale = float(scale)
-        self.intensity_to_color = nn.Conv2d(channels, channels, 1)
-        self.color_to_intensity = nn.Conv2d(channels, channels, 1)
-        nn.init.zeros_(self.intensity_to_color.weight)
-        nn.init.zeros_(self.intensity_to_color.bias)
-        nn.init.zeros_(self.color_to_intensity.weight)
-        nn.init.zeros_(self.color_to_intensity.bias)
 
-    def forward(self, color_feat, intensity_feat):
-        color_update = self.intensity_to_color(intensity_feat)
-        intensity_update = self.color_to_intensity(color_feat)
-        color_feat = color_feat + self.scale * color_update
-        intensity_feat = intensity_feat + self.scale * intensity_update
-        return color_feat, intensity_feat
+        # Kernel 3x3:
+        # 18 canais para offsets:
+        #   9 posições × 2 coordenadas (dx, dy)
+        #
+        # 9 canais para a máscara de modulação:
+        #   9 posições × 1 valor
+        #
+        # Total = 27 canais
+        self.offset_mask = nn.Conv2d(
+            channels,
+            27,
+            kernel_size=3,
+            stride=1,
+            padding=1
+        )
 
+        # Convolução deformável
+        self.dconv = ops.DeformConv2d(
+            channels,
+            channels,
+            kernel_size=3,
+            stride=1,
+            padding=1
+        )
+
+        # Ativação
+        self.act = nn.PReLU(
+            num_parameters=channels
+        )
+
+        # Inicialização
+        nn.init.zeros_(self.offset_mask.weight)
+        nn.init.zeros_(self.offset_mask.bias)
+
+        # Ramo residual começa próximo de zero
+        nn.init.zeros_(self.dconv.weight)
+
+        if self.dconv.bias is not None:
+            nn.init.zeros_(self.dconv.bias)
+
+    def forward(self, x):
+
+        # Prediz offsets + máscara
+        offset_mask = self.offset_mask(x)
+
+        # Primeiros 18 canais:
+        # offsets espaciais (dx, dy)
+        offset = offset_mask[:, :18, :, :]
+
+        # Últimos 9 canais:
+        # fatores de modulação
+        mask = offset_mask[:, 18:, :, :]
+
+        # Limita a máscara entre 0 e 1
+        mask = torch.sigmoid(mask)
+
+        # DCNv2 = input + offset + mask
+        out = self.dconv(
+            x,
+            offset,
+            mask
+        )
+
+        out = self.act(out)
+
+        return x + out
+
+#Usar apenas um retorno no cross attenction , porém nisso é preciso o caminho principal da rede
 
 
 # Arquitetura principal.
@@ -387,18 +509,24 @@ class LCWHVINet(nn.Module):
         # Embedding da cor: recebe H e V.
         self.color_embed = nn.Sequential(
             nn.Conv2d(2, channels, 3, padding=1, bias=bias),
-            nn.GELU(),
+            nn.PReLU(num_parameters=channels),
+            # nn.PReLU() Aplicar o RELU e posteriomente o PReLU
         )
 
         # Embedding da intensidade: recebe somente I.
         self.intensity_embed = nn.Sequential(
             nn.Conv2d(1, channels, 3, padding=1, bias=bias),
-            nn.GELU(),
+            nn.PReLU(num_parameters=channels),
         )
 
         # Wavelet atua somente sobre a intensidade.
         self.wavelet = IntensityWaveletBranch(channels)
         self.wavelet_scale = 0.1
+        
+        #Refinamento usando convulações deformáveis 
+        
+        self.intensity_deform = DeformableResidualBlock(channels)
+        
 
         # Dois backbones independentes de Restormer.
         self.color_body = nn.Sequential(*[
@@ -428,14 +556,14 @@ class LCWHVINet(nn.Module):
         # A cabeca de intensidade preve uma curva escalar por pixel.
         self.intensity_head = nn.Sequential(
             nn.Conv2d(channels, channels, 3, padding=1, bias=bias),
-            nn.GELU(),
+            nn.PReLU(num_parameters=channels),
             nn.Conv2d(channels, 1, 3, padding=1, bias=True),
         )
 
         # A cabeca de cor preve somente uma pequena correcao em H e V.
         self.color_head = nn.Sequential(
             nn.Conv2d(channels, channels, 3, padding=1, bias=bias),
-            nn.GELU(),
+            nn.PReLU(num_parameters=channels),
             nn.Conv2d(channels, 2, 3, padding=1, bias=True),
         )
 
@@ -444,6 +572,7 @@ class LCWHVINet(nn.Module):
         nn.init.zeros_(self.intensity_head[-1].bias)
         nn.init.zeros_(self.color_head[-1].weight)
         nn.init.zeros_(self.color_head[-1].bias)
+        #Tentar utilizar outros inicializadores nas cabeças 
 
     def current_hvi_k(self):
         return self.hvi.current_k()
@@ -478,28 +607,41 @@ class LCWHVINet(nn.Module):
             wave_feat = self.wavelet(intensity_in) * 0.0
         else:
             wave_feat = torch.zeros_like(intensity_feat)
-        intensity_feat = intensity_feat + self.wavelet_scale * wave_feat
+            
+            
+            
+        # intensity_feat = intensity_feat + self.wavelet_scale * wave_feat
 
-        # 4. Processamento profundo com Restormer, sem janelas espaciais.
+        # # 4. Processamento profundo com Restormer, sem janelas espaciais.
+        # color_feat = self.color_body(color_feat)
+        # intensity_feat = self.intensity_body(intensity_feat)
+        
+        intensity_feat = intensity_feat + self.wavelet_scale * wave_feat 
+        #4. Refinamento especial adaptativo com convoluções deformáveis para intensidade
+        intensity_feat = self.intensity_deform(intensity_feat) 
+        
+        # 5. Processamento profundo com Restormer, sem janelas espaciais.
         color_feat = self.color_body(color_feat)
         intensity_feat = self.intensity_body(intensity_feat)
 
-        # 5. Interacao controlada entre os dois ramos.
+        # 6. Interacao controlada entre os dois ramos.
         color_feat, intensity_feat = self.cross_fusion(color_feat, intensity_feat)
 
-        # 6. Corrige intensidade por uma curva limitada e iniciada em identidade.
+        # 7. Corrige intensidade por uma curva limitada e iniciada em identidade.
         raw_curve = self.intensity_head(intensity_feat)
         intensity_out, curve = self.apply_intensity_curve(intensity_in, raw_curve)
 
-        # 7. Cor: travada na fase inicial ou corrigida por delta pequeno e limitado.
+        # 8. Cor: travada na fase inicial ou corrigida por delta pequeno e limitado.
         raw_delta_hv = self.color_head(color_feat)
         if self.color_mode == "lock":
             delta_hv = raw_delta_hv * 0.0
         else:
             delta_hv = self.color_scale * torch.tanh(raw_delta_hv)
+            
+        #Quefren recomendar usar contatenacao. 
         hv_out = (hv_in + delta_hv).clamp(-1.0, 1.0)
 
-        # 8. Junta H, V e I corrigidos e volta para RGB.
+        # 9. Junta H, V e I corrigidos e volta para RGB.
         hvi_out = torch.cat([hv_out, intensity_out], dim=1)
         output = self.hvi.hvi_to_rgb(hvi_out).clamp(0.0, 1.0)
 
