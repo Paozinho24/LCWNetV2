@@ -312,6 +312,41 @@ class IntensityWaveletBranch(nn.Module):
         wave = F.interpolate(wave, size=intensity.shape[-2:], mode="bilinear", align_corners=False)
         wave = self.refine(wave)
         return wave[:, :, :h0, :w0]
+    
+    
+#Modulo SFT 
+class SFTLayer(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+
+        # Extrai informações da branch condicionante
+        self.condition = nn.Sequential(
+            nn.Conv2d(channels,channels,kernel_size=3,padding=1),
+            nn.PReLU(num_parameters=channels ))
+
+        # Prediz gamma
+        self.gamma = nn.Conv2d(channels,channels,kernel_size=3,padding=1)
+
+        # Prediz beta
+        self.beta = nn.Conv2d(channels,channels,kernel_size=3,padding=1)
+
+        # SFT começa como identidade
+        nn.init.zeros_(self.gamma.weight)
+        nn.init.zeros_(self.gamma.bias)
+
+        nn.init.zeros_(self.beta.weight)
+        nn.init.zeros_(self.beta.bias)
+
+    def forward(self, feature, condition):
+
+        condition = self.condition(condition)
+
+        gamma = self.gamma(condition)
+        beta = self.beta(condition)
+
+        return feature * (1.0 + gamma) + beta
+
+
 
 
 class CrossBranchFusion(nn.Module):
@@ -375,11 +410,9 @@ class CrossBranchFusion(nn.Module):
             )
         )
 
-        color_feat = (color_feat + self.scale * color_update
-        )
+        color_feat = (color_feat + self.scale * color_update)
 
-        intensity_feat = (intensity_feat + self.scale * intensity_update
-        )
+        intensity_feat = (intensity_feat + self.scale * intensity_update)
 
         return (
             color_feat,
@@ -607,8 +640,6 @@ class LCWHVINet(nn.Module):
             wave_feat = self.wavelet(intensity_in) * 0.0
         else:
             wave_feat = torch.zeros_like(intensity_feat)
-            
-            
             
         # intensity_feat = intensity_feat + self.wavelet_scale * wave_feat
 
