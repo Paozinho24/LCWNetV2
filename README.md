@@ -1,718 +1,777 @@
-LCWHVINet: Low-Light Image Enhancement com HVI, Wavelet e Restormer
+# LCWHVINet
 
-1. Descrição
+> **Low-Light Image Enhancement with HVI, Wavelet and Restormer**
 
-A LCWHVINet é uma arquitetura de restauração de imagens de baixa iluminação desenvolvida para reduzir instabilidades de luminância e, principalmente, reconstruções cromáticas excessivamente saturadas. A proposta substitui a reconstrução RGB livre da versão anterior por um processamento desacoplado de intensidade e cromaticidade.
+<p align="center">
+  <img src="https://img.shields.io/badge/Task-Low--Light%20Image%20Enhancement-blue" alt="Task">
+  <img src="https://img.shields.io/badge/Framework-PyTorch-ee4c2c" alt="PyTorch">
+  <img src="https://img.shields.io/badge/Backbone-Restormer-6f42c1" alt="Restormer">
+  <img src="https://img.shields.io/badge/Color%20Space-HVI-2ea44f" alt="HVI">
+  <img src="https://img.shields.io/badge/Status-Research-orange" alt="Research">
+</p>
 
-A imagem de entrada é representada no espaço HVI, no qual os canais H e V carregam informação cromática e o canal I representa intensidade. A informação de frequência extraída por Wavelet atua exclusivamente no ramo de intensidade. Os ramos de cor e intensidade são processados por blocos do tipo Restormer e interagem por uma fusão residual controlada. A saída de intensidade é produzida por uma curva limitada, enquanto a cor pode permanecer bloqueada ou receber apenas uma pequena correção limitada.
+## Overview
 
-O pipeline completo trabalha em RGB normalizado no intervalo [0,1].
+**LCWHVINet** is a low-light image restoration architecture designed to reduce luminance instability and, in particular, excessively saturated chromatic reconstructions.
 
-2. Objetivos do redesign
+Instead of performing an unconstrained RGB reconstruction, the network separates the problem into two components:
 
-Os objetivos principais são:
+- **chromaticity**, represented by the H and V channels of HVI;
+- **intensity**, represented by the I channel.
 
-impedir reconstruções RGB independentes e sem restrição;
+Wavelet information is used only in the intensity branch. Color and intensity are processed with Restormer-style blocks and interact through controlled residual fusion.
 
-separar explicitamente correção de iluminação e correção de cor;
+The complete pipeline operates on **RGB images normalized to `[0, 1]`**.
 
-permitir um treinamento inicial com cromaticidade bloqueada;
+### Main design goals
 
-limitar matematicamente a magnitude da correção cromática;
+- Prevent unconstrained independent RGB reconstruction.
+- Explicitly separate illumination and chromatic correction.
+- Allow an initial training stage with chromaticity completely locked.
+- Mathematically bound the magnitude of chromatic correction.
+- Preserve Wavelet as a frequency-information source without directly reconstructing RGB.
+- Replace Swin spatial-window dependence with Restormer processing.
+- Monitor PSNR, SSIM, LPIPS, intensity error, chromatic error and clipping.
+- Use the same training/inference pipeline for **LSD/PAMAZONIA, LOL-v1 and LOL-v2**.
 
-manter Wavelet como fonte de informação de frequência sem reconstruir diretamente RGB;
+---
 
-remover a dependência de janelas espaciais do Swin;
+## Architecture
 
-monitorar PSNR, SSIM, LPIPS, erro de intensidade, erro cromático e clipping;
+```mermaid
+flowchart TD
+    A["RGB input<br/>[0,1]"] --> B["RGB → HVI"]
 
-utilizar um único código para LSD/PAMAZONIA, LOL-v1 e LOL-v2.
+    B --> C["H,V<br/>Chromaticity"]
+    B --> D["I<br/>Intensity"]
 
-3. Estrutura da arquitetura
+    C --> E["Embedding"]
+    D --> F["Embedding"]
 
-Fluxo simplificado:
+    E --> G["Restormer"]
+    F --> H["Wavelet"]
+    H --> I["Restormer"]
 
-RGB [0,1]
-   |
-   v
-RGB -> HVI
-   |
-   +----------------------+
-   |                      |
-   v                      v
-H,V                    Intensidade I
-Cor                    Iluminação
-   |                      |
-Embedding              Embedding
-   |                      |
-Restormer              Wavelet
-   |                      |
-   |                   Restormer
-   |                      |
-   +---- Cross Fusion ----+
-   |                      |
-   v                      v
-Delta H,V limitado     Curva de intensidade
-   |                      |
-   v                      v
-H,V corrigidos         I corrigida
-   +----------+-----------+
-              |
-              v
-             HVI
-              |
-              v
-          HVI -> RGB
-              |
-              v
-          saída [0,1]
+    G <--> J["Cross Fusion"]
+    I <--> J
 
-No modo color_mode=lock, a correção cromática é exatamente zero:
+    J --> K["Bounded ΔH,V"]
+    J --> L["Intensity curve"]
 
-HV_out = HV_input
+    K --> M["Corrected H,V"]
+    L --> N["Corrected I"]
 
-No modo color_mode=bounded, a correção é limitada:
+    M --> O["HVI"]
+    N --> O
 
-delta_HV = color_scale * tanh(raw_delta_HV)
-HV_out = HV_input + delta_HV
+    O --> P["HVI → RGB"]
+    P --> Q["Output<br/>[0,1]"]
+```
 
-O valor padrão é:
+### Chromatic modes
 
+| Mode | Behavior | Recommended use |
+|---|---|---|
+| `lock` | `HV_out = HV_input` | Initial stabilization phase |
+| `bounded` | `HV_out = HV_input + ΔHV` | Controlled chromatic refinement |
+
+For `bounded` mode:
+
+```text
+ΔHV = color_scale × tanh(raw_ΔHV)
+```
+
+Default value:
+
+```text
 color_scale = 0.03
+```
 
-A intensidade é modificada por uma curva limitada e diferenciável. As cabeças responsáveis pela curva e pela correção cromática são inicializadas em zero, fazendo com que a arquitetura comece aproximadamente como uma transformação identidade.
+The intensity branch uses a bounded differentiable curve. The curve head and chromatic-correction head are zero-initialized so that the architecture starts approximately as an identity transformation.
 
-4. Arquivos necessários
+---
 
-A estrutura recomendada do projeto é:
+## Repository structure
 
-/home/unicornio/User/LCWNet/
-|
-|-- models/
-|   |-- __init__.py
-|   |-- lcw_hvi_backbone.py
-|   `-- loss_hvi.py
-|
-|-- dataload/
-|   |-- __init__.py
-|   `-- llie_dataset.py
-|
-|-- train_lcw_hvi.py
-`-- infer_lcw_hvi.py
+```text
+LCWNet/
+├── models/
+│   ├── __init__.py
+│   ├── lcw_hvi_backbone.py
+│   └── loss_hvi.py
+│
+├── dataload/
+│   ├── __init__.py
+│   └── llie_dataset.py
+│
+├── train_lcw_hvi.py
+└── infer_lcw_hvi.py
+```
 
+Generated training artifacts should normally remain outside version control:
 
-5. Dependências
+```text
+ckpt/
+results/
+*.pth
+*.pt
+*.ckpt
+*.out
+*.err
+```
 
-O código utiliza:
+---
 
-Python
-PyTorch
-Torchvision
-NumPy
-Pillow
-LPIPS (opcional para inferência)
+## Requirements
 
-Para instalar LPIPS no ambiente virtual:
+Core dependencies:
 
+- Python
+- PyTorch
+- Torchvision
+- NumPy
+- Pillow
+- LPIPS — optional for inference/evaluation
+
+Install LPIPS:
+
+```bash
 source /home/unicornio/User/.venv/bin/activate
 python -m pip install lpips
+```
 
-Antes de treinar, confirme:
+Check PyTorch and CUDA visibility:
 
+```bash
 python -c "import torch; print(torch.__version__); print(torch.cuda.is_available())"
+```
 
-6. Estrutura dos datasets
+---
 
-O arquivo dataload/llie_dataset.py seleciona automaticamente as pastas a partir de --dataset_name.
+## Data conventions
 
-6.1 LSD
+### Normalization
 
-Estrutura esperada:
+```text
+RGB float32 ∈ [0,1]
+```
 
-/home/unicornio/User/DataSetsLLIE/LSD/
-|
-|-- inputPatchDLL/
-|-- gtPatchDLL/
-`-- Testing/
-    `-- In-the-wild/
-        `-- DEI/
-            |-- DEI_LOW/
-            `-- DEI_GT/
+Do **not** convert the dataset to `[-1,1]`.
 
-Treinamento:
+### Data augmentation
 
-inputPatchDLL -> LOW
-gtPatchDLL    -> GT
+Only synchronized geometric augmentation is used between LOW and GT:
 
-Validação padrão:
+- horizontal flip;
+- vertical flip;
+- rotations of `0°`, `90°`, `180°` or `270°`;
+- synchronized crop.
 
-DEI_LOW -> LOW
-DEI_GT  -> GT
+No `ColorJitter`, gamma modification or chromatic augmentation should be introduced.
 
-6.2 LOL-v1
+---
 
-/home/unicornio/User/DataSetsLLIE/LOLv1/
-|
-|-- our485/
-|   |-- low/
-|   `-- high/
-|
-`-- eval15/
-    |-- low/
-    `-- high/
+## Supported datasets
 
-6.3 LOL-v2 Real
+The dataloader automatically selects the expected directory structure from `--dataset_name`.
 
-/home/unicornio/User/DataSetsLLIE/LOLv2/Real_captured/
-|
-|-- Train/
-|   |-- Low/
-|   `-- Normal/
-|
-`-- Test/
-    |-- Low/
-    `-- Normal/
+| Dataset | `--dataset_name` | Train LOW | Train GT |
+|---|---|---|---|
+| LSD | `lsd` | `inputPatchDLL/` | `gtPatchDLL/` |
+| PAMAZONIA | `pamazonia` | dataset-specific | dataset-specific |
+| LOL-v1 | `lolv1` | `our485/low/` | `our485/high/` |
+| LOL-v2 Real | `lolv2_real` | `Train/Low/` | `Train/Normal/` |
+| LOL-v2 Synthetic | `lolv2_synthetic` | `Train/Low/` | `Train/Normal/` |
 
-6.4 LOL-v2 Synthetic
+<details>
+<summary><strong>LSD directory structure</strong></summary>
 
-/home/unicornio/User/DataSetsLLIE/LOLv2/Synthetic/
-|
-|-- Train/
-|   |-- Low/
-|   `-- Normal/
-|
-`-- Test/
-    |-- Low/
-    `-- Normal/
+```text
+DataSetsLLIE/LSD/
+├── inputPatchDLL/
+├── gtPatchDLL/
+└── Testing/
+    └── In-the-wild/
+        └── DEI/
+            ├── DEI_LOW/
+            └── DEI_GT/
+```
 
-7. Nomes aceitos em --dataset_name
+Default validation:
 
-lsd
-pamazonia
-lolv1
-lolv2_real
-lolv2_synthetic
+```text
+DEI_LOW → LOW
+DEI_GT  → GT
+```
+</details>
 
-Exemplo:
+<details>
+<summary><strong>LOL-v1 directory structure</strong></summary>
 
---dataset_name lolv1
+```text
+DataSetsLLIE/LOLv1/
+├── our485/
+│   ├── low/
+│   └── high/
+└── eval15/
+    ├── low/
+    └── high/
+```
+</details>
 
-O objetivo é não manter arquivos de treinamento separados por dataset.
+<details>
+<summary><strong>LOL-v2 Real directory structure</strong></summary>
 
-8. Normalização
+```text
+DataSetsLLIE/LOLv2/Real_captured/
+├── Train/
+│   ├── Low/
+│   └── Normal/
+└── Test/
+    ├── Low/
+    └── Normal/
+```
+</details>
 
-A nova arquitetura usa exclusivamente:
+<details>
+<summary><strong>LOL-v2 Synthetic directory structure</strong></summary>
 
-RGB float32 em [0,1]
+```text
+DataSetsLLIE/LOLv2/Synthetic/
+├── Train/
+│   ├── Low/
+│   └── Normal/
+└── Test/
+    ├── Low/
+    └── Normal/
+```
+</details>
 
-Não deve existir conversão do dataset para [-1,1].
+---
 
-O dataloader também não utiliza ColorJitter, alterações de gamma ou augmentações cromáticas. As augmentações são apenas geométricas e sincronizadas entre LOW e GT:
+# Training
 
-flip horizontal
-flip vertical
-rotação 0, 90, 180 ou 270 graus
-crop sincronizado
+## Recommended LSD configuration
 
-Esse comportamento é importante para não introduzir artificialmente diferenças de cor entre LOW e GT.
-
-9. Treinamento
-
-9.1 Treinamento recomendado para LSD
-
+```bash
 torchrun --standalone --nproc_per_node=3 \
-/home/unicornio/User/LCWNet/train_lcw_hvi.py \
---dataset_name lsd \
---dataset_root /home/unicornio/User/DataSetsLLIE \
---patch_size 128 \
---patches_per_image 16 \
---batch_size 16 \
---num_workers 8 \
---channels 48 \
---num_heads 4 \
---depth 4 \
---wavelet_mode on \
---color_mode lock \
---color_unlock_epoch 31 \
---color_scale 0.03 \
---curve_steps 4 \
---curve_scale 1.0 \
---hvi_k 0.2 \
---epochs 500 \
---lr 5e-5 \
---min_lr 1e-6 \
---warmup_epochs 5 \
---grad_clip 1.0 \
---val_every 1 \
---val_max_side 1024 \
---checkpoints_dir /home/unicornio/User/LCWNet/ckpt/LCWHVINet_LSD
+  /home/unicornio/User/LCWNet/train_lcw_hvi.py \
+  --dataset_name lsd \
+  --dataset_root /home/unicornio/User/DataSetsLLIE \
+  --patch_size 128 \
+  --patches_per_image 16 \
+  --batch_size 16 \
+  --num_workers 8 \
+  --channels 48 \
+  --num_heads 4 \
+  --depth 4 \
+  --wavelet_mode on \
+  --color_mode lock \
+  --color_unlock_epoch 31 \
+  --color_scale 0.03 \
+  --curve_steps 4 \
+  --curve_scale 1.0 \
+  --hvi_k 0.2 \
+  --epochs 500 \
+  --lr 5e-5 \
+  --min_lr 1e-6 \
+  --warmup_epochs 5 \
+  --grad_clip 1.0 \
+  --val_every 1 \
+  --val_max_side 1024 \
+  --checkpoints_dir /home/unicornio/User/LCWNet/ckpt/LCWHVINet_LSD
+```
 
-9.2 Protocolo cromático recomendado
+## Recommended chromatic protocol
 
-Durante as primeiras 30 épocas:
+### Epochs 1–30
 
+```text
 color_mode = lock
+```
 
-A rede pode modificar a intensidade, mas não pode modificar H e V.
+The network may modify intensity, but **H and V remain unchanged**.
 
-A partir da época 31:
+Expected behavior:
 
+```text
+delta_hv_abs_mean = 0
+```
+
+### From epoch 31
+
+```text
 color_mode = bounded
+```
 
-Isso é controlado automaticamente por:
+Automatic transition:
 
---color_mode lock
---color_unlock_epoch 31
-
-Antes de aceitar a liberação de cor, avalie visualmente e quantitativamente epoch_0030.pth.
-
-Caso ainda exista alteração cromática forte com color_mode=lock, não avance para bounded. Nesse cenário, investigue primeiramente o pipeline RGB, pareamento LOW/GT e transformação HVI.
-
-Para manter a cor bloqueada durante todas as épocas:
-
---color_mode lock
---color_unlock_epoch -1
-
-Para permitir correção cromática desde a primeira época:
-
---color_mode bounded
-
-Essa última configuração não é recomendada para o primeiro experimento.
-
-9.3 LOL-v1
-
-O mesmo arquivo é usado. Altere apenas o dataset e o diretório de checkpoints:
-
-torchrun --standalone --nproc_per_node=3 \
-/home/unicornio/User/LCWNet/train_lcw_hvi.py \
---dataset_name lolv1 \
---dataset_root /home/unicornio/User/DataSetsLLIE \
---patch_size 128 \
---patches_per_image 16 \
---batch_size 16 \
---num_workers 8 \
---channels 48 \
---num_heads 4 \
---depth 4 \
---wavelet_mode on \
+```bash
 --color_mode lock \
---color_unlock_epoch 31 \
---epochs 500 \
---checkpoints_dir /home/unicornio/User/LCWNet/ckpt/LCWHVINet_LOLv1
+--color_unlock_epoch 31
+```
 
-9.4 LOL-v2 Real
+Before enabling chromatic correction, inspect `epoch_0030.pth` visually and quantitatively.
 
+> If strong chromatic changes are already present while `color_mode=lock`, do not continue to the bounded stage. First inspect RGB preprocessing, LOW/GT pairing and the HVI transformation.
+
+Keep color locked for the entire training:
+
+```bash
+--color_mode lock \
+--color_unlock_epoch -1
+```
+
+Enable bounded color correction from the first epoch:
+
+```bash
+--color_mode bounded
+```
+
+This last option is **not recommended for the first experiment**.
+
+---
+
+## Other datasets
+
+### LOL-v1
+
+```bash
+torchrun --standalone --nproc_per_node=3 \
+  /home/unicornio/User/LCWNet/train_lcw_hvi.py \
+  --dataset_name lolv1 \
+  --dataset_root /home/unicornio/User/DataSetsLLIE \
+  --patch_size 128 \
+  --patches_per_image 16 \
+  --batch_size 16 \
+  --num_workers 8 \
+  --channels 48 \
+  --num_heads 4 \
+  --depth 4 \
+  --wavelet_mode on \
+  --color_mode lock \
+  --color_unlock_epoch 31 \
+  --epochs 500 \
+  --checkpoints_dir /home/unicornio/User/LCWNet/ckpt/LCWHVINet_LOLv1
+```
+
+### LOL-v2 Real
+
+```bash
 --dataset_name lolv2_real
+```
 
-9.5 LOL-v2 Synthetic
+### LOL-v2 Synthetic
 
+```bash
 --dataset_name lolv2_synthetic
+```
 
-10. Checkpoints
+---
 
-O treinamento produz:
+## Checkpoints
 
+Training generates:
+
+```text
 latest.pth
 best_psnr.pth
 best_ssim.pth
 best_chroma.pth
 epoch_XXXX.pth
 train_log.csv
+```
 
-best_chroma.pth corresponde ao menor erro de magnitude cromática observado durante a validação.
+`best_chroma.pth` corresponds to the checkpoint with the lowest observed chromatic-magnitude error during validation.
 
-Para avaliação científica final, compare pelo menos:
+For final scientific evaluation, compare at least:
 
-best_psnr.pth
-best_ssim.pth
-best_chroma.pth
+- `best_psnr.pth`
+- `best_ssim.pth`
+- `best_chroma.pth`
 
-Não avalie apenas latest.pth.
+Do not evaluate only `latest.pth`.
 
-11. Retomada de treinamento
+---
 
-Exemplo:
+## Resume training
 
+```bash
 torchrun --standalone --nproc_per_node=3 \
-/home/unicornio/User/LCWNet/train_lcw_hvi.py \
---dataset_name lsd \
---dataset_root /home/unicornio/User/DataSetsLLIE \
---epochs 500 \
---batch_size 16 \
---patch_size 128 \
---patches_per_image 16 \
---channels 48 \
---num_heads 4 \
---depth 4 \
---wavelet_mode on \
---color_mode lock \
---color_unlock_epoch 31 \
---checkpoints_dir /home/unicornio/User/LCWNet/ckpt/LCWHVINet_LSD \
---resume /home/unicornio/User/LCWNet/ckpt/LCWHVINet_LSD/latest.pth
+  /home/unicornio/User/LCWNet/train_lcw_hvi.py \
+  --dataset_name lsd \
+  --dataset_root /home/unicornio/User/DataSetsLLIE \
+  --epochs 500 \
+  --batch_size 16 \
+  --patch_size 128 \
+  --patches_per_image 16 \
+  --channels 48 \
+  --num_heads 4 \
+  --depth 4 \
+  --wavelet_mode on \
+  --color_mode lock \
+  --color_unlock_epoch 31 \
+  --checkpoints_dir /home/unicornio/User/LCWNet/ckpt/LCWHVINet_LSD \
+  --resume /home/unicornio/User/LCWNet/ckpt/LCWHVINet_LSD/latest.pth
+```
 
-Parâmetros estruturais precisam coincidir com o checkpoint.
+> Structural parameters must match the checkpoint.
 
-Não use checkpoints da LCWSwinNet antiga na LCWHVINet.
+Do not use checkpoints from the previous LCWSwinNet architecture.
 
-12. Métricas monitoradas no treinamento
+---
 
-O CSV registra:
+## Training metrics
 
-loss_total
-loss_rgb
-loss_intensity
-loss_hv
-loss_chroma
-loss_hue
-loss_grad
-loss_curve_smooth
-loss_color_delta
-loss_ssim
-grad_norm
-curve_abs_mean
-delta_hv_abs_mean
-train_high_clip_fraction
-val_psnr
-val_ssim
-val_intensity_mae
-val_chroma_mae
-val_high_clip_fraction
+| Optimization | Image quality | Color / intensity | Diagnostics |
+|---|---|---|---|
+| `loss_total` | `loss_ssim` | `loss_intensity` | `grad_norm` |
+| `loss_rgb` | `val_psnr` | `loss_hv` | `curve_abs_mean` |
+| `loss_grad` | `val_ssim` | `loss_chroma` | `delta_hv_abs_mean` |
+| `loss_curve_smooth` |  | `loss_hue` | `train_high_clip_fraction` |
+| `loss_color_delta` |  | `val_intensity_mae` | `val_high_clip_fraction` |
+|  |  | `val_chroma_mae` |  |
 
-Para o problema de cor estourada, monitore principalmente:
+For the oversaturated-color problem, monitor especially:
 
+```text
 val_chroma_mae
 delta_hv_abs_mean
 val_high_clip_fraction
+```
 
-Durante color_mode=lock:
+---
 
-delta_hv_abs_mean = 0
+# Inference
 
-é o comportamento esperado.
+The same `infer_lcw_hvi.py` script is used for all supported datasets.
 
-13. Inferência
+## LSD / DEI
 
-O arquivo infer_lcw_hvi.py também é único para todos os datasets.
-
-13.1 Inferência automática no LSD/DEI
-
-Se --input_path não for informado, o script localiza automaticamente o conjunto de validação:
-
+```bash
 python /home/unicornio/User/LCWNet/infer_lcw_hvi.py \
---checkpoint /home/unicornio/User/LCWNet/ckpt/LCWHVINet_LSD/best_psnr.pth \
---dataset_name lsd \
---dataset_root /home/unicornio/User/DataSetsLLIE \
---output_dir /home/unicornio/User/LCWNet/results/LCWHVINet_LSD_DEI \
---device cuda \
---tile_size 0
+  --checkpoint /home/unicornio/User/LCWNet/ckpt/LCWHVINet_LSD/best_psnr.pth \
+  --dataset_name lsd \
+  --dataset_root /home/unicornio/User/DataSetsLLIE \
+  --output_dir /home/unicornio/User/LCWNet/results/LCWHVINet_LSD_DEI \
+  --device cuda \
+  --tile_size 0
+```
 
-13.2 Inferência LOL-v1
+## LOL-v1
 
+```bash
 python /home/unicornio/User/LCWNet/infer_lcw_hvi.py \
---checkpoint /home/unicornio/User/LCWNet/ckpt/LCWHVINet_LOLv1/best_psnr.pth \
---dataset_name lolv1 \
---dataset_root /home/unicornio/User/DataSetsLLIE \
---output_dir /home/unicornio/User/LCWNet/results/LCWHVINet_LOLv1 \
---device cuda \
---tile_size 0
+  --checkpoint /home/unicornio/User/LCWNet/ckpt/LCWHVINet_LOLv1/best_psnr.pth \
+  --dataset_name lolv1 \
+  --dataset_root /home/unicornio/User/DataSetsLLIE \
+  --output_dir /home/unicornio/User/LCWNet/results/LCWHVINet_LOLv1 \
+  --device cuda \
+  --tile_size 0
+```
 
-13.3 Inferência em uma pasta arbitrária
+## Arbitrary LOW/GT folders
 
+```bash
 python /home/unicornio/User/LCWNet/infer_lcw_hvi.py \
---checkpoint /home/unicornio/User/LCWNet/ckpt/LCWHVINet_LSD/best_psnr.pth \
---dataset_name lsd \
---input_path /caminho/LOW \
---gt_path /caminho/GT \
---output_dir /caminho/resultados \
---device cuda
+  --checkpoint /home/unicornio/User/LCWNet/ckpt/LCWHVINet_LSD/best_psnr.pth \
+  --dataset_name lsd \
+  --input_path /caminho/LOW \
+  --gt_path /caminho/GT \
+  --output_dir /caminho/resultados \
+  --device cuda
+```
 
-Quando --gt_path é omitido, a rede gera as imagens, mas PSNR, SSIM, LPIPS, Intensity-MAE e Chroma-MAE não são calculados.
+When `--gt_path` is omitted, images are generated normally, but PSNR, SSIM, LPIPS, Intensity-MAE and Chroma-MAE are not calculated.
 
-14. Inferência por tiles
+---
 
-Para uma imagem que cabe integralmente na GPU, use:
+## Tiled inference
 
+For images that fit entirely in GPU memory:
+
+```bash
 --tile_size 0
+```
 
-Essa configuração deve ser utilizada nos primeiros testes de artefatos, porque elimina a composição por tiles como variável experimental.
+Use this first when diagnosing visual artifacts because it removes tile composition as an experimental variable.
 
-Para imagens 4K que ultrapassem a memória disponível:
+For large/4K images:
 
---tile_size 512
+```bash
+--tile_size 512 \
 --tile_overlap 64
+```
 
-O script usa uma janela de Hann para misturar regiões sobrepostas.
+The inference script uses a **Hann window** to blend overlapping regions.
 
-Evite tiles muito pequenos durante a avaliação qualitativa. Um tile de 128 pixels pode restringir excessivamente o contexto espacial e introduzir descontinuidades visuais.
+Avoid very small tiles during qualitative evaluation. A tile size of `128` may restrict spatial context and introduce visible discontinuities.
 
-15. AMP
+---
 
-AMP está desligado por padrão.
+## AMP
 
-Para ativar:
+AMP is disabled by default.
 
+Enable with:
+
+```bash
 --amp
+```
 
-Nos primeiros experimentos relacionados a estabilidade de cor, recomenda-se executar sem AMP. Isso reduz uma variável numérica adicional durante o diagnóstico.
+For early experiments focused on chromatic stability, running **without AMP** is recommended to reduce an additional source of numerical variation.
 
-16. LPIPS
+---
 
-LPIPS é calculado quando existe GT.
+## LPIPS
 
-Para desativar:
+LPIPS is calculated when GT is available.
 
+Disable:
+
+```bash
 --disable_lpips
+```
 
-Para escolher o backbone:
+Choose backbone:
 
+```bash
 --lpips_net alex
+```
 
-ou:
+or:
 
+```bash
 --lpips_net vgg
+```
 
-Para imagens grandes, a avaliação LPIPS pode ser limitada:
+Limit LPIPS evaluation size for large images:
 
+```bash
 --lpips_max_size 256
+```
 
-17. Saídas da inferência
+---
 
-O diretório de resultados contém:
+## Inference outputs
 
+```text
 imagem_LCWHVI.png
 metrics.csv
 metrics_summary.txt
+```
 
-O CSV registra:
+Recorded metrics include:
 
-PSNR
-SSIM
-LPIPS
-Intensity MAE
-Chroma MAE
-fração de pixels >= 0.999
-tempo de inferência
-média da saída
-caminho da imagem salva
+- PSNR
+- SSIM
+- LPIPS
+- Intensity MAE
+- Chroma MAE
+- fraction of pixels `>= 0.999`
+- inference time
+- output mean
+- saved-image path
 
-A fração de pixels maiores ou iguais a 0.999 deve ser monitorada para detectar clipping excessivo de altas luzes.
+The fraction of pixels `>= 0.999` should be monitored to detect excessive highlight clipping.
 
-18. Execução no servidor com Singularity
+---
 
-O projeto utilizado neste ambiente está em:
+# PAVIC GPU Farm
 
-/home/unicornio/User/LCWNet
+## Environment used
 
-Imagem Singularity:
+| Resource | Path |
+|---|---|
+| Project | `/home/unicornio/User/LCWNet` |
+| Singularity image | `/home/unicornio/Python.sif` |
+| Python virtual environment | `/home/unicornio/User/.venv` |
+| Job scripts | `/home/unicornio/User/gpuFarm` |
 
-/home/unicornio/Python.sif
+Recommended organization:
 
-Ambiente virtual:
-
-/home/unicornio/User/.venv
-
-A execução pode ser encapsulada em um arquivo .sh dentro de:
-
-/home/unicornio/User/gpuFarm
-
-19. Arquivo .sh de treinamento
-
-Exemplo fornecido:
-
-train_lcw_hvi.sh
-
-Torne-o executável:
-
-chmod +x /home/unicornio/User/gpuFarm/train_lcw_hvi.sh
-
-Teste dentro do Singularity:
-
-singularity exec --nv \
--B /home/unicornio \
--B /scratch \
---pwd /home/unicornio/User/LCWNet \
-/home/unicornio/Python.sif \
-bash /home/unicornio/User/gpuFarm/train_lcw_hvi.sh
-
-20. Execução direta com srun
-
-Exemplo em três GPUs de um único nó:
-
-srun -N1 -n1 \
---cpu_bind=cores \
---nodelist=gn02 \
---cpus-per-task=64 \
-singularity exec --nv \
--B /home/unicornio \
--B /scratch \
---pwd /home/unicornio/User/LCWNet \
-/home/unicornio/Python.sif \
-bash /home/unicornio/User/gpuFarm/train_lcw_hvi.sh
-
-O CUDA_VISIBLE_DEVICES=0,1,2 e o torchrun --nproc_per_node=3 já podem permanecer dentro do .sh.
-
-21. Arquivo .slurm
-
-Um arquivo .slurm é utilizado com sbatch.
-
-Exemplo:
-
-sbatch /home/unicornio/User/gpuFarm/train_lcw_hvi.slurm
-
-Consultar jobs:
-
-squeue -u unicornio
-
-Cancelar:
-
-scancel ID_DO_JOB
-
-A diretiva:
-
-#SBATCH --gres=gpu:a100:3
-
-solicita três A100 quando essa sintaxe estiver configurada no cluster. Caso a GPU-FARM utilize outro nome de recurso, altere apenas essa diretiva.
-
-22. .sh versus .ssh
-
-.sh é um script Shell executável. É o formato utilizado para guardar os comandos de treinamento e inferência.
-
-.ssh normalmente não é uma extensão de script. O diretório:
-
-~/.ssh/
-
-armazena chaves e configuração do SSH.
-
-Portanto, para executar a LCWHVINet no servidor, normalmente são necessários:
-
-train_lcw_hvi.sh
-train_lcw_hvi.slurm
-
-e não um arquivo .ssh.
-
-23. Configuração SSH opcional
-
-Caso deseje simplificar o acesso ao servidor, crie:
-
-~/.ssh/config
-
-com estrutura semelhante a:
-
-Host pavicgpufarm
-    HostName ENDERECO_REAL_DO_SERVIDOR
-    User unicornio
-    IdentityFile ~/.ssh/SUA_CHAVE_PRIVADA
-    IdentitiesOnly yes
-
-Depois ajuste permissões:
-
-chmod 700 ~/.ssh
-chmod 600 ~/.ssh/config
-chmod 600 ~/.ssh/SUA_CHAVE_PRIVADA
-
-A chave pública pode permanecer com:
-
-chmod 644 ~/.ssh/SUA_CHAVE_PRIVADA.pub
-
-Nunca envie a chave privada para GitHub, repositórios ou outras pessoas.
-
-Depois:
-
-ssh pavicgpufarm
-
-Não preencha HostName ou IdentityFile com valores inventados. Utilize o host real fornecido pela administração da GPU-FARM e a chave privada efetivamente cadastrada para acesso ao servidor.
-
-24. Organização recomendada no servidor
-
+```text
 /home/unicornio/User/
-|
-|-- LCWNet/
-|   |-- models/
-|   |-- dataload/
-|   |-- train_lcw_hvi.py
-|   |-- infer_lcw_hvi.py
-|   |-- ckpt/
-|   `-- results/
-|
-|-- DataSetsLLIE/
-|   |-- LSD/
-|   |-- LOLv1/
-|   `-- LOLv2/
-|
-|-- gpuFarm/
-|   |-- train_lcw_hvi.sh
-|   |-- infer_lcw_hvi.sh
-|   |-- train_lcw_hvi.slurm
-|   `-- infer_lcw_hvi.slurm
-|
-`-- .venv/
+├── LCWNet/
+│   ├── models/
+│   ├── dataload/
+│   ├── train_lcw_hvi.py
+│   ├── infer_lcw_hvi.py
+│   ├── ckpt/
+│   └── results/
+│
+├── DataSetsLLIE/
+│   ├── LSD/
+│   ├── LOLv1/
+│   └── LOLv2/
+│
+├── gpuFarm/
+│   ├── train_lcw_hvi.sh
+│   ├── infer_lcw_hvi.sh
+│   ├── train_lcw_hvi.slurm
+│   └── infer_lcw_hvi.slurm
+│
+└── .venv/
+```
 
-25. Verificações antes do primeiro treinamento
+---
 
-Execute:
+## Shell script
 
+Make the training script executable:
+
+```bash
+chmod +x /home/unicornio/User/gpuFarm/train_lcw_hvi.sh
+```
+
+Test it through Singularity:
+
+```bash
+singularity exec --nv \
+  -B /home/unicornio \
+  -B /scratch \
+  --pwd /home/unicornio/User/LCWNet \
+  /home/unicornio/Python.sif \
+  bash /home/unicornio/User/gpuFarm/train_lcw_hvi.sh
+```
+
+> `.sh` is a shell script. `~/.ssh/` stores SSH keys/configuration; it is not a training-script format.
+
+---
+
+## Direct execution with `srun`
+
+Example using three GPUs from a single node:
+
+```bash
+srun -N1 -n1 \
+  --cpu_bind=cores \
+  --nodelist=gn02 \
+  --cpus-per-task=64 \
+  singularity exec --nv \
+  -B /home/unicornio \
+  -B /scratch \
+  --pwd /home/unicornio/User/LCWNet \
+  /home/unicornio/Python.sif \
+  bash /home/unicornio/User/gpuFarm/train_lcw_hvi.sh
+```
+
+`CUDA_VISIBLE_DEVICES=0,1,2` and `torchrun --nproc_per_node=3` may remain inside the `.sh` script.
+
+---
+
+## SLURM
+
+Submit:
+
+```bash
+sbatch /home/unicornio/User/gpuFarm/train_lcw_hvi.slurm
+```
+
+Check jobs:
+
+```bash
+squeue -u unicornio
+```
+
+Cancel:
+
+```bash
+scancel ID_DO_JOB
+```
+
+A typical GPU request is:
+
+```bash
+#SBATCH --gres=gpu:a100:3
+```
+
+If the cluster uses another GRES naming convention, modify only that directive.
+
+### Monitor logs
+
+```bash
+tail -f /home/unicornio/User/gpuFarm/lcwhvi_train_JOBID.out
+```
+
+Errors:
+
+```bash
+tail -f /home/unicornio/User/gpuFarm/lcwhvi_train_JOBID.err
+```
+
+Training CSV:
+
+```text
+CHECKPOINTS_DIR/train_log.csv
+```
+
+Preserve this file together with the checkpoints used in the article and ablation studies.
+
+---
+
+# Pre-flight validation
+
+```bash
 cd /home/unicornio/User/LCWNet
 source /home/unicornio/User/.venv/bin/activate
+
 python -m py_compile models/lcw_hvi_backbone.py
 python -m py_compile models/loss_hvi.py
 python -m py_compile dataload/llie_dataset.py
 python -m py_compile train_lcw_hvi.py
 python -m py_compile infer_lcw_hvi.py
+```
 
-Depois confirme importações:
+Check imports:
 
+```bash
 python -c "from models.lcw_hvi_backbone import LCWHVINet; print('Backbone OK')"
 python -c "from models.loss_hvi import LCWHVITotalLoss; print('Loss OK')"
 python -c "from dataload.llie_dataset import LLIETrainDataset; print('Dataset OK')"
+```
 
-26. Protocolo inicial recomendado
+---
 
-Para o primeiro experimento científico:
+# Recommended initial experimental protocol
 
-mantenha wavelet_mode=on;
+1. Keep `wavelet_mode=on`.
+2. Start with `color_mode=lock`.
+3. Set `color_unlock_epoch=31`.
+4. Train with `128 × 128` patches.
+5. Inspect `epoch_0005`, `epoch_0010`, `epoch_0020` and `epoch_0030`.
+6. Perform the first inference with `tile_size=0` on an image that fits in GPU memory.
+7. Compare PSNR, SSIM, LPIPS, Intensity-MAE, Chroma-MAE and clipping.
+8. Confirm visually that chromaticity remains stable.
+9. Only then enable the `bounded` chromatic phase.
+10. Compare `best_psnr`, `best_ssim` and `best_chroma`.
 
-mantenha color_mode=lock;
+This protocol experimentally separates illumination correction from chromatic correction and reduces the number of simultaneous variables during diagnosis.
 
-configure color_unlock_epoch=31;
+---
 
-treine com patches 128x128;
+# Compatibility
 
-acompanhe epoch_0005, epoch_0010, epoch_0020 e epoch_0030;
+Architecture identifier:
 
-execute inferência inicialmente com tile_size=0 em uma imagem que caiba na GPU;
-
-compare PSNR, SSIM, LPIPS, Intensity-MAE, Chroma-MAE e clipping;
-
-confirme visualmente que a cor permanece estável;
-
-somente então permita a fase bounded;
-
-compare best_psnr, best_ssim e best_chroma.
-
-Esse protocolo separa experimentalmente o problema de iluminação do problema cromático e reduz a quantidade de alterações simultâneas durante o diagnóstico.
-
-27. Observação de compatibilidade
-
-A arquitetura possui a identificação:
-
+```text
 LCWHVINet_HVI_Restormer_v1
+```
 
-Os scripts recusam checkpoints de versões anteriores. Isso é intencional.
+The scripts intentionally reject incompatible checkpoints.
 
-Não use checkpoints da LCWSwinNet baseada em Swin, base_head, residual_head, downscaling ou faixa [-1,1].
+Do **not** use checkpoints from the previous LCWSwinNet architecture based on:
 
-28. Arquivos de log
+- Swin;
+- `base_head`;
+- `residual_head`;
+- downscaling;
+- input/output range `[-1,1]`.
 
-Para acompanhar um job submetido pelo SLURM:
+---
 
-tail -f /home/unicornio/User/gpuFarm/lcwhvi_train_JOBID.out
+## Research note
 
-ou, conforme o arquivo .slurm fornecido:
+The architecture is designed around the hypothesis that illumination correction and chromatic reconstruction should not be optimized as an unconstrained RGB transformation.
 
-tail -f /home/unicornio/User/gpuFarm/lcwhvi_train_JOBID.err
-
-O CSV do treinamento permanece em:
-
-CHECKPOINTS_DIR/train_log.csv
-
-e deve ser preservado junto com os checkpoints utilizados no artigo e nos estudos de ablação.
+The initial `lock` stage therefore provides an explicit experimental control: if color instability appears before the chromatic branch is enabled, the source of the problem is likely elsewhere in the image pipeline rather than in learned chromatic correction.

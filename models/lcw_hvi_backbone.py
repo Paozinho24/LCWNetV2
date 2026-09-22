@@ -521,7 +521,7 @@ class LCWHVINet(nn.Module):
 
         # Wavelet atua somente sobre a intensidade.
         self.wavelet = IntensityWaveletBranch(channels)
-        self.wavelet_scale = 0.1
+        self.wavelet_scale = 0.2
         
         #Refinamento usando convulações deformáveis 
         
@@ -551,7 +551,7 @@ class LCWHVINet(nn.Module):
         ])
 
         # Troca controlada de informacao entre cor e intensidade.
-        self.cross_fusion = CrossBranchFusion(channels, scale=0.1)
+        self.cross_fusion = CrossBranchFusion(channels, scale=0.2)
 
         # A cabeca de intensidade preve uma curva escalar por pixel.
         self.intensity_head = nn.Sequential(
@@ -617,6 +617,7 @@ class LCWHVINet(nn.Module):
         # intensity_feat = self.intensity_body(intensity_feat)
         
         intensity_feat = intensity_feat + self.wavelet_scale * wave_feat 
+        
         #4. Refinamento especial adaptativo com convoluções deformáveis para intensidade
         intensity_feat = self.intensity_deform(intensity_feat) 
         
