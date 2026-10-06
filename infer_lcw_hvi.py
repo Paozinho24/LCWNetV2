@@ -58,7 +58,7 @@ def get_args():
     parser.add_argument(
         "--tile_overlap",
         type=int,
-        default=64,
+        default=1024,
     )
     parser.add_argument(
         "--tile_log_interval",

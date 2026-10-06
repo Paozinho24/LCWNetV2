@@ -15,7 +15,6 @@ IMAGE_EXTENSIONS = {
 # Nomes aceitos pelo script único de treinamento/inferência.
 DATASET_CHOICES = (
     "lsd",
-    "pamazonia",
     "lolv1",
     "lolv2_real",
     "lolv2_synthetic",
