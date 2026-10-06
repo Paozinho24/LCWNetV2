@@ -32,7 +32,7 @@ The complete pipeline operates on **RGB images normalized to `[0, 1]`**.
 - Preserve Wavelet as a frequency-information source without directly reconstructing RGB.
 - Replace Swin spatial-window dependence with Restormer processing.
 - Monitor PSNR, SSIM, LPIPS, intensity error, chromatic error and clipping.
-- Use the same training/inference pipeline for **LSD/PAMAZONIA, LOL-v1 and LOL-v2**.
+- Use the same training/inference pipeline for **LSD, LOL-v1 and LOL-v2**.
 
 ---
 
@@ -178,7 +178,6 @@ The dataloader automatically selects the expected directory structure from `--da
 | Dataset | `--dataset_name` | Train LOW | Train GT |
 |---|---|---|---|
 | LSD | `lsd` | `inputPatchDLL/` | `gtPatchDLL/` |
-| PAMAZONIA | `pamazonia` | dataset-specific | dataset-specific |
 | LOL-v1 | `lolv1` | `our485/low/` | `our485/high/` |
 | LOL-v2 Real | `lolv2_real` | `Train/Low/` | `Train/Normal/` |
 | LOL-v2 Synthetic | `lolv2_synthetic` | `Train/Low/` | `Train/Normal/` |
