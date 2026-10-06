@@ -316,35 +316,37 @@ class IntensityWaveletBranch(nn.Module):
     
 #Modulo SFT 
 class SFTLayer(nn.Module):
-    def __init__(self, x0_ch, x1_ch):
+    def __init__(self, channels):
         super().__init__()
 
-        self.SFT_scale_conv0 = nn.Conv2d(x1_ch, x0_ch, 1)
-        self.SFT_scale_conv1 = nn.Conv2d(x0_ch, x0_ch, 1)
+        # Extrai informações da branch condicionante
+        self.condition = nn.Sequential(
+            nn.Conv2d(channels,channels,kernel_size=3,padding=1),
+            nn.PReLU(num_parameters=channels ))
 
-        self.SFT_shift_conv0 = nn.Conv2d(x1_ch, x0_ch, 1)
-        self.SFT_shift_conv1 = nn.Conv2d(x0_ch, x0_ch, 1)
+        # Prediz gamma
+        self.gamma = nn.Conv2d(channels,channels,kernel_size=3,padding=1)
 
-    def forward(self, x0, x1):
-        """Características de x0 condicionadas por x1."""
+        # Prediz beta
+        self.beta = nn.Conv2d(channels,channels,kernel_size=3,padding=1)
 
-        scale = self.SFT_scale_conv1(
-            F.leaky_relu(
-                self.SFT_scale_conv0(x1),
-                0.1,
-                inplace=True
-            )
-        )
+        # SFT começa como identidade
+        nn.init.zeros_(self.gamma.weight)
+        nn.init.zeros_(self.gamma.bias)
 
-        shift = self.SFT_shift_conv1(
-            F.leaky_relu(
-                self.SFT_shift_conv0(x1),
-                0.1,
-                inplace=True
-            )
-        )
+        nn.init.zeros_(self.beta.weight)
+        nn.init.zeros_(self.beta.bias)
 
-        return x0 * (scale + 1.0) + shift
+    def forward(self, feature, condition):
+
+        condition = self.condition(condition)
+
+        gamma = self.gamma(condition)
+        beta = self.beta(condition)
+
+        return feature * (1.0 + gamma) + beta
+
+
 
 
 class CrossBranchFusion(nn.Module):
@@ -357,25 +359,66 @@ class CrossBranchFusion(nn.Module):
 
         self.scale = float(scale)
 
-        # Intensidade a cor
-        self.intensity_to_color = SFTLayer(channels, channels)
+        # Intensidade -> cor
+        self.intensity_to_color = nn.Conv2d(
+            channels,
+            channels,
+            kernel_size=1
+        )
 
-        # Cor a intensidade
-        self.color_to_intensity = SFTLayer(channels, channels)
+        # Cor -> intensidade
+        self.color_to_intensity = nn.Conv2d(
+            channels,
+            channels,
+            kernel_size=1
+        )
 
-    
-    def forward(self,color_feat,intensity_feat):
+        # A interação começa desligada
+        nn.init.zeros_(
+            self.intensity_to_color.weight
+        )
 
-        color_input = color_feat
-        intensity_input = intensity_feat
+        nn.init.zeros_(
+            self.intensity_to_color.bias
+        )
 
-        # Para intesidade controlar a cor
-        color_feat = self.intensity_to_color(color_input,intensity_input)
+        nn.init.zeros_(
+            self.color_to_intensity.weight
+        )
 
-        # Para cor controlar a intensidade
-        intensity_feat = self.color_to_intensity(intensity_input,color_input)
+        nn.init.zeros_(
+            self.color_to_intensity.bias
+        )
 
-        return color_feat, intensity_feat
+    def forward(
+        self,
+        color_feat,
+        intensity_feat
+    ):
+
+        # Intensidade influencia cor
+        color_update = (
+            self.intensity_to_color(
+                intensity_feat
+            )
+        )
+
+        # Cor influencia intensidade
+        intensity_update = (
+            self.color_to_intensity(
+                color_feat
+            )
+        )
+
+        color_feat = (color_feat + self.scale * color_update)
+
+        intensity_feat = (intensity_feat + self.scale * intensity_update)
+
+        return (
+            color_feat,
+            intensity_feat
+        )
+
 
 
 
