@@ -164,7 +164,7 @@ class LCWHVITotalLoss(nn.Module):
         chroma_weight=0.2,
         hue_weight=0.1,
         grad_weight=0.05,
-        curve_smooth_weight=0.02,
+        curve_smooth_weight=0.1,
         color_delta_weight=0.02,
         ssim_weight=0.1,
         color_mode="lock",

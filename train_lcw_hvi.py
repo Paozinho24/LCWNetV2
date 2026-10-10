@@ -21,7 +21,7 @@ from models.lcw_hvi_backbone import LCWHVINet
 from models.loss_hvi import LCWHVITotalLoss
 from dataload.llie_dataset import DATASET_CHOICES, build_datasets_from_args
 
-ARCHITECTURE_VERSION = "LCWHVINet_HVI_Restormer_v1"
+ARCHITECTURE_VERSION = "LCWHVINet_HVI"
 
 LOSS_KEYS = (
     "loss_total", "loss_rgb", "loss_intensity", "loss_hv", "loss_chroma",
@@ -104,7 +104,7 @@ def get_args():
     parser.add_argument("--chroma_weight", type=float, default=0.2)
     parser.add_argument("--hue_weight", type=float, default=0.1)
     parser.add_argument("--grad_weight", type=float, default=0.05)
-    parser.add_argument("--curve_smooth_weight", type=float, default=0.02)
+    parser.add_argument("--curve_smooth_weight", type=float, default=0.10)
     parser.add_argument("--color_delta_weight", type=float, default=0.02)
     parser.add_argument("--ssim_weight", type=float, default=0.1)
     parser.add_argument("--edge_strength", type=float, default=10.0)
@@ -856,7 +856,7 @@ def main():
     # LSD/PAMAZONIA já são armazenados como patches prontos.
     # LOL usa imagens maiores e pode gerar vários crops virtuais por imagem.
     if args.patches_per_image == 0:
-        if args.dataset_name in {"lsd", "pamazonia"}:
+        if args.dataset_name in {"lsd"}:
             args.patches_per_image = 1
         else:
             args.patches_per_image = 16

@@ -284,69 +284,122 @@ class HaarDWT(nn.Module):
 # interpolacao bilinear. Elas nao sao somadas diretamente ao RGB final.
 
 class IntensityWaveletBranch(nn.Module):
-    def __init__(self, channels):
+    def __init__(
+        self,
+        channels,
+        threshold_init=0.01
+    ):
         super().__init__()
+
         self.dwt = HaarDWT()
+
         self.band_fusion = nn.Sequential(
-            nn.Conv2d(4, channels, 3, padding=1),
+            nn.Conv2d(4,channels,3,padding=1),
             nn.PReLU(num_parameters=channels),
-            nn.Conv2d(channels, channels, 3, padding=1),
+            nn.Conv2d(channels,channels,3,padding=1),
         )
+
         self.refine = nn.Sequential(
-            nn.Conv2d(channels, channels, 3, padding=1),
+            nn.Conv2d(channels,channels,3,padding=1),
             nn.PReLU(num_parameters=channels),
-            nn.Conv2d(channels, channels, 3, padding=1),
+            nn.Conv2d(channels,channels,3,padding=1),
         )
+
+        # Threshold Wavelet aprendível
+        
+        threshold_init = max( float(threshold_init), 1e-6)
+        # Parâmetro interno antes do Softplus.
+        # Isso permite que o threshold aprendido
+        # seja sempre positivo.
+        raw_init = math.log(math.expm1(threshold_init))
+        self.detail_threshold_raw = nn.Parameter(torch.tensor(raw_init,dtype=torch.float32))
+
+    def current_threshold(self):
+
+        # Softplus garante:
+        #
+        # threshold > 0
+        #
+        # sem precisar usar clamp.
+        return F.softplus(
+            self.detail_threshold_raw
+        )
+
+    @staticmethod
+    def soft_threshold(x,threshold):
+        return (torch.sign(x)* F.relu(torch.abs(x)- threshold))
 
     def forward(self, intensity):
         h0, w0 = intensity.shape[-2:]
         pad_h = h0 % 2
         pad_w = w0 % 2
         if pad_h or pad_w:
-            mode = "reflect" if h0 > 1 and w0 > 1 else "replicate"
-            intensity = F.pad(intensity, (0, pad_w, 0, pad_h), mode=mode)
 
-        ll, lh, hl, hh = self.dwt(intensity)
+            mode = ("reflect" if h0 > 1 and w0 > 1 else "replicate")
+            intensity = F.pad(intensity,(0, pad_w, 0, pad_h),mode=mode)
+
         
-        wave = self.band_fusion(torch.cat([ll, lh, hl, hh], dim=1))
-        wave = F.interpolate(wave, size=intensity.shape[-2:], mode="bilinear", align_corners=False)
+        # 1. Decomposição Wavelet
+        
+        ll, lh, hl, hh = self.dwt(intensity)
+
+        # 2. Threshold aprendido
+        threshold = (self.current_threshold().to(dtype=lh.dtype))
+        # 3. Shrinkage somente nas bandas
+        #    de detalhe
+
+        lh = self.soft_threshold(lh, threshold)
+        hl = self.soft_threshold( hl,threshold)
+        hh = self.soft_threshold(hh,threshold)
+
+        # LL permanece intacto.
+
+        # 4. Fusão das quatro bandas
+        
+        wave = self.band_fusion(torch.cat([ll, lh, hl, hh],dim=1))
+        
+        # 5. Retorna à resolução original
+
+        wave = F.interpolate(wave,size=intensity.shape[-2:],mode="bilinear",align_corners=False)
         wave = self.refine(wave)
-        return wave[:, :, :h0, :w0]
+
+        return wave[:,:,:h0,:w0]
+
+
+
+
+
+
+# class IntensityWaveletBranch(nn.Module):
+#     def __init__(self, channels):
+#         super().__init__()
+#         self.dwt = HaarDWT()
+#         self.band_fusion = nn.Sequential(
+#             nn.Conv2d(4, channels, 3, padding=1),
+#             nn.PReLU(num_parameters=channels),
+#             nn.Conv2d(channels, channels, 3, padding=1),
+#         )
+#         self.refine = nn.Sequential(
+#             nn.Conv2d(channels, channels, 3, padding=1),
+#             nn.PReLU(num_parameters=channels),
+#             nn.Conv2d(channels, channels, 3, padding=1),
+#         )
+
+#     def forward(self, intensity):
+#         h0, w0 = intensity.shape[-2:]
+#         pad_h = h0 % 2
+#         pad_w = w0 % 2
+#         if pad_h or pad_w:
+#             mode = "reflect" if h0 > 1 and w0 > 1 else "replicate"
+#             intensity = F.pad(intensity, (0, pad_w, 0, pad_h), mode=mode)
+
+#         ll, lh, hl, hh = self.dwt(intensity)
+        
+#         wave = self.band_fusion(torch.cat([ll, lh, hl, hh], dim=1))
+#         wave = F.interpolate(wave, size=intensity.shape[-2:], mode="bilinear", align_corners=False)
+#         wave = self.refine(wave)
+#         return wave[:, :, :h0, :w0]
     
-    
-#Modulo SFT 
-class SFTLayer(nn.Module):
-    def __init__(self, channels):
-        super().__init__()
-
-        # Extrai informações da branch condicionante
-        self.condition = nn.Sequential(
-            nn.Conv2d(channels,channels,kernel_size=3,padding=1),
-            nn.PReLU(num_parameters=channels ))
-
-        # Prediz gamma
-        self.gamma = nn.Conv2d(channels,channels,kernel_size=3,padding=1)
-
-        # Prediz beta
-        self.beta = nn.Conv2d(channels,channels,kernel_size=3,padding=1)
-
-        # SFT começa como identidade
-        nn.init.zeros_(self.gamma.weight)
-        nn.init.zeros_(self.gamma.bias)
-
-        nn.init.zeros_(self.beta.weight)
-        nn.init.zeros_(self.beta.bias)
-
-    def forward(self, feature, condition):
-
-        condition = self.condition(condition)
-
-        gamma = self.gamma(condition)
-        beta = self.beta(condition)
-
-        return feature * (1.0 + gamma) + beta
-
-
 
 
 class CrossBranchFusion(nn.Module):
