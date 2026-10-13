@@ -14,7 +14,7 @@ import torch.optim as optim
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from torch.optim.lr_scheduler import (LinearLR, CosineAnnealingLR, SequentialLR,)
 
 
 from models.lcw_hvi_backbone import LCWHVINet
@@ -119,9 +119,9 @@ def get_args():
     parser.add_argument("--warmup_epochs", type=int, default=5)
     parser.add_argument("--grad_clip", type=float, default=1.0)
     
-    # Cosine Annealing Warm Restarts
-    parser.add_argument("--restart_cycle", type=int, default=60)
-    parser.add_argument("--restart_decay", type=float, default=1.0)
+    # # Cosine Annealing Warm Restarts
+    # parser.add_argument("--restart_cycle", type=int, default=60)
+    # parser.add_argument("--restart_decay", type=float, default=1.0)
 
     # Checkpoints.
     parser.add_argument(
@@ -195,7 +195,8 @@ def seed_worker(worker_id):
     random.seed(worker_seed)
 
 
-# # Warmup linear seguido de cosine decay.
+# # # Warmup linear seguido de cosine decay.
+
 # def build_scheduler(
 #     optimizer,
 #     epochs,
@@ -247,53 +248,118 @@ def seed_worker(worker_id):
 #     )
 
 
-class ConsineAnnelingWarmRestartsDecay(CosineAnnealingWarmRestarts):
-    def __init__(self, optimizer, T_0, T_mult=1, eta_min=0, last_epoch=-1, decay=1):
+# class ConsineAnnelingWarmRestartsDecay(CosineAnnealingWarmRestarts):
+#     def __init__(self, optimizer, T_0, T_mult=1, eta_min=0, last_epoch=-1, decay=1):
         
-        self.decay = float(decay)
-        self.initial_lrs  = [
-            group["lr"] 
-            for group in optimizer.param_groups
-        ]
-        super().__init__(optimizer, T_0=T_0, T_mult=T_mult, eta_min=eta_min, last_epoch=last_epoch)
+#         self.decay = float(decay)
+#         self.initial_lrs  = [
+#             group["lr"] 
+#             for group in optimizer.param_groups
+#         ]
+#         super().__init__(optimizer, T_0=T_0, T_mult=T_mult, eta_min=eta_min, last_epoch=last_epoch)
         
-        def step (self, epoch=None):
-            if epoch is None:
-                if epoch < 0:
-                    raise ValueError(f"Epoca deve ser maior ou igual a zero, mas epoch={epoch} foi fornecido.")
+#         def step (self, epoch=None):
+#             if epoch is None:
+#                 if epoch < 0:
+#                     raise ValueError(f"Epoca deve ser maior ou igual a zero, mas epoch={epoch} foi fornecido.")
                 
-                if epoch >= self.T_0:
-                    if self.T_mult == 1:
-                        cycle_number = int(epoch // self.T_0)
-                    else:
-                        cycle_number = int(
-                            math.log(
-                                epoch / self.T_0 * (self.T_mult - 1) + 1,
-                                self.T_mult,
-                            )
-                    )
-                else: 
-                    cycle_number = 0
+#                 if epoch >= self.T_0:
+#                     if self.T_mult == 1:
+#                         cycle_number = int(epoch // self.T_0)
+#                     else:
+#                         cycle_number = int(
+#                             math.log(
+#                                 epoch / self.T_0 * (self.T_mult - 1) + 1,
+#                                 self.T_mult,
+#                             )
+#                     )
+#                 else: 
+#                     cycle_number = 0
                 
-                self.base_lrs = [
-                    initial_lr * (self.decay ** cycle_number)
-                    for initial_lr in self.initial_lrs
-                ]
-            else: 
-                # Necessário para funcionamento interno
-                # do scheduler durante inicialização.
-                if (
-                    hasattr(self, "T_cur")
-                    and hasattr(self, "T_i")
-                    and self.T_cur + 1 == self.T_i
-                ):
+#                 self.base_lrs = [
+#                     initial_lr * (self.decay ** cycle_number)
+#                     for initial_lr in self.initial_lrs
+#                 ]
+#             else: 
+#                 # Necessário para funcionamento interno
+#                 # do scheduler durante inicialização.
+#                 if (
+#                     hasattr(self, "T_cur")
+#                     and hasattr(self, "T_i")
+#                     and self.T_cur + 1 == self.T_i
+#                 ):
 
-                    self.base_lrs = [
-                        base_lr * self.decay
-                        for base_lr in self.base_lrs
-                    ]
-            super().step(epoch)
-            
+#                     self.base_lrs = [
+#                         base_lr * self.decay
+#                         for base_lr in self.base_lrs
+#                     ]
+#             super().step(epoch)
+
+
+def build_scheduler(
+    optimizer,
+    epochs,
+    steps_per_epoch,
+    warmup_epochs,
+    min_lr,
+):
+    total_steps = max(
+        1,
+        epochs * steps_per_epoch
+    )
+
+    warmup_steps = max(
+        0,
+        warmup_epochs * steps_per_epoch
+    )
+
+    if warmup_steps >= total_steps:
+        raise ValueError(
+            "warmup_epochs precisa ser menor "
+            "que o número total de épocas."
+        )
+
+    cosine_steps = max(
+        1,
+        total_steps - warmup_steps
+    )
+
+    # Sem warmup.
+    if warmup_steps == 0:
+        return CosineAnnealingLR(
+            optimizer,
+            T_max=cosine_steps,
+            eta_min=min_lr,
+        )
+
+    # 10% do LR inicial -> 100% do LR.
+    warmup_scheduler = LinearLR(
+        optimizer,
+        start_factor=0.1,
+        end_factor=1.0,
+        total_iters=warmup_steps,
+    )
+
+    # Depois do warmup, reduz suavemente
+    # até min_lr.
+    cosine_scheduler = CosineAnnealingLR(
+        optimizer,
+        T_max=cosine_steps,
+        eta_min=min_lr,
+    )
+
+    scheduler = SequentialLR(
+        optimizer,
+        schedulers=[
+            warmup_scheduler,
+            cosine_scheduler,
+        ],
+        milestones=[
+            warmup_steps
+        ],
+    )
+
+    return scheduler          
 
 def get_model_module(model):
     return model.module if hasattr(model, "module") else model
@@ -403,16 +469,19 @@ def train_one_epoch(
         optimizer.step()
 
         if scheduler is not None:
+            scheduler.step()
 
-            epoch_progress = (
-                epoch
-                + (batch_idx + 1)
-                / total_batches
-            )
+        # if scheduler is not None:
 
-            scheduler.step(
-                epoch_progress
-            )
+        #     epoch_progress = (
+        #         epoch
+        #         + (batch_idx + 1)
+        #         / total_batches
+        #     )
+
+        #     scheduler.step(
+        #         epoch_progress
+        #     )
 
         # optimizer.step()
 
@@ -973,13 +1042,23 @@ def main():
         )
 
         # 6. Scheduler.
-        scheduler = ConsineAnnelingWarmRestartsDecay(
-            optimizer,
-            T_0=args.restart_cycle,
-            T_mult=1,
-            eta_min=args.min_lr,
-            decay=args.restart_decay,
+        
+        scheduler = build_scheduler(
+            optimizer = optimizer,
+            epochs = args.epochs,
+            steps_per_epoch = len(train_loader),
+            warmup_epochs = args.warmup_epochs,
+            min_lr = args.min_lr,
         )
+        
+        
+        # scheduler = ConsineAnnelingWarmRestartsDecay(
+        #     optimizer,
+        #     T_0=args.restart_cycle,
+        #     T_mult=1,
+        #     eta_min=args.min_lr,
+        #     decay=args.restart_decay,
+        # )
         
         
         # scheduler = build_scheduler(
@@ -990,6 +1069,9 @@ def main():
         #     args.lr,
         #     args.min_lr,
         # )
+        
+        
+        
 
         # 7. Checkpoints e resume.
         os.makedirs(args.checkpoints_dir, exist_ok=True)
