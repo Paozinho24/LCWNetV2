@@ -24,8 +24,8 @@ from dataload.llie_dataset import DATASET_CHOICES, build_datasets_from_args
 ARCHITECTURE_VERSION = "LCWHVINet_HVI"
 
 LOSS_KEYS = (
-    "loss_total", "loss_rgb", "loss_intensity", "loss_hv", "loss_chroma",
-    "loss_hue", "loss_grad", "loss_curve_smooth", "loss_color_delta", "loss_ssim",
+    "loss_total", "loss_rgb",'loss_mse', "loss_intensity", "loss_hv", "loss_chroma",
+    "loss_hue", "loss_grad", "loss_curve_smooth", "loss_color_delta", "loss_ssim", 
 )
 
 
@@ -83,10 +83,7 @@ def get_args():
     parser.add_argument("--expansion_factor", type=float, default=2.66)
     parser.add_argument("--wavelet_mode", type=str, default="on", choices=["on", "off"])
     parser.add_argument("--color_mode", type=str, default="lock", choices=["lock", "bounded"])
-    parser.add_argument(
-        "--color_unlock_epoch", type=int, default=-1,
-        help="época em que lock muda para bounded; -1 mantém a cor travada",
-    )
+    parser.add_argument("--color_unlock_epoch", type=int, default=-1, help="época em que lock muda para bounded; -1 mantém a cor travada",)
     parser.add_argument("--color_scale", type=float, default=0.03)
     parser.add_argument("--curve_steps", type=int, default=4)
     parser.add_argument("--curve_scale", type=float, default=1.0)
@@ -99,6 +96,7 @@ def get_args():
 
     # Loss.
     parser.add_argument("--rgb_weight", type=float, default=1.0)
+    parser.add_argument("--mse_weight",type=float,default=0.5)
     parser.add_argument("--intensity_weight", type=float, default=0.5)
     parser.add_argument("--hv_weight", type=float, default=0.5)
     parser.add_argument("--chroma_weight", type=float, default=0.2)
@@ -520,6 +518,7 @@ def train_one_epoch(
                 f"({progress:5.1f}%) | "
                 f"Loss {loss_logs['loss_total']:.6f} | "
                 f"RGB {loss_logs['loss_rgb']:.6f} | "
+                f"RGB-MSE {loss_logs['loss_mse']:.6f} | "
                 f"I {loss_logs['loss_intensity']:.6f} | "
                 f"HV {loss_logs['loss_hv']:.6f} | "
                 f"Chroma {loss_logs['loss_chroma']:.6f} | "
@@ -1015,6 +1014,7 @@ def main():
         # 4. Loss HVI.
         criterion = LCWHVITotalLoss(
             rgb_weight=args.rgb_weight,
+            mse_weight=args.mse_weight,
             intensity_weight=args.intensity_weight,
             hv_weight=args.hv_weight,
             chroma_weight=args.chroma_weight,

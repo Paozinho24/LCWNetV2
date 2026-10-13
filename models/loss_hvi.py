@@ -159,6 +159,7 @@ class LCWHVITotalLoss(nn.Module):
     def __init__(
         self,
         rgb_weight=1.0,
+        mse_weight=0.5,
         intensity_weight=0.5,
         hv_weight=0.5,
         chroma_weight=0.2,
@@ -177,6 +178,7 @@ class LCWHVITotalLoss(nn.Module):
             raise ValueError("color_mode deve ser 'lock' ou 'bounded'.")
 
         self.rgb_weight = float(rgb_weight)
+        self.mse_weight = float(mse_weight)
         self.intensity_weight = float(intensity_weight)
         self.hv_weight = float(hv_weight)
         self.chroma_weight = float(chroma_weight)
@@ -230,6 +232,9 @@ class LCWHVITotalLoss(nn.Module):
 
         # Reconstrucao RGB final.
         loss_rgb = self.rgb_loss(output, target)
+        
+        # Reconstrucao MSE final.
+        loss_mse = F.mse_loss(output,target)
 
         # Supervisiona somente a intensidade no ramo de iluminacao.
         loss_intensity = self.intensity_loss(aux["intensity_out"], intensity_target)
@@ -253,6 +258,7 @@ class LCWHVITotalLoss(nn.Module):
 
         total = (
             self.rgb_weight * loss_rgb
+            + self.mse_weight * loss_mse
             + self.intensity_weight * loss_intensity
             + self.grad_weight * loss_grad
             + self.curve_smooth_weight * loss_curve_smooth
@@ -266,6 +272,7 @@ class LCWHVITotalLoss(nn.Module):
         logs = {
             "loss_total": float(total.detach().cpu()),
             "loss_rgb": float(loss_rgb.detach().cpu()),
+            "loss_mse": float(loss_mse.detach().cpu()),
             "loss_intensity": float(loss_intensity.detach().cpu()),
             "loss_hv": float(loss_hv.detach().cpu()),
             "loss_chroma": float(loss_chroma.detach().cpu()),
