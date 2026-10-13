@@ -640,10 +640,16 @@ class LCWHVINet(nn.Module):
         self.cross_fusion = CrossBranchFusion(channels, scale=0.2)
 
         # A cabeca de intensidade preve uma curva escalar por pixel.
+        # self.intensity_head = nn.Sequential(
+        #     nn.Conv2d(channels, channels, 3, padding=1, bias=bias),
+        #     nn.PReLU(num_parameters=channels),
+        #     nn.Conv2d(channels, 1, 3, padding=1, bias=True),
+        # )
+        
         self.intensity_head = nn.Sequential(
-            nn.Conv2d(channels, channels, 3, padding=1, bias=bias),
+            nn.Conv2d(channels,channels,3,padding=1,bias=bias),
             nn.PReLU(num_parameters=channels),
-            nn.Conv2d(channels, 1, 3, padding=1, bias=True),
+            nn.Conv2d(channels, self.curve_steps,3,padding=1,bias=True),
         )
 
         # A cabeca de cor preve somente uma pequena correcao em H e V.
