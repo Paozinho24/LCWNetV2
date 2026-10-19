@@ -293,6 +293,11 @@ def _candidate_pair_stems(stem):
     """Gera nomes possíveis para localizar o par LOW/GT."""
     candidates = [stem]
     lower = stem.lower()
+    
+    # Pareamento do LOL-v2 Real:
+    # low00001.png -> normal00001.png
+    if lower.startswith("low") and lower[3:].isdigit():
+        candidates.append("normal" + lower[3:])
 
     replacements = (
         ("_low", "_gt"),
