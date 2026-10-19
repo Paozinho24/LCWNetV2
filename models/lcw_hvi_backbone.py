@@ -646,11 +646,25 @@ class LCWHVINet(nn.Module):
         #     nn.Conv2d(channels, 1, 3, padding=1, bias=True),
         # )
         
+        
         self.intensity_head = nn.Sequential(
             nn.Conv2d(channels,channels,3,padding=1,bias=bias),
             nn.PReLU(num_parameters=channels),
             nn.Conv2d(channels, self.curve_steps,3,padding=1,bias=True),
         )
+        
+        
+        # Adicionando uma cabeça residual extra para o ramo de intensidade para pequenas correções de intensidade, caso necessário por causa da transformação matemática. 
+        
+        
+        self.intensity_residual_head = nn.Sequential(
+            nn.Conv2d(channels, channels, kernel_size=3 , padding=1, bias=bias),
+            nn.PReLU(num_parameters=channels),
+            nn.Conv2d(channels, 1, kernel_size=3, padding=1, bias=True),
+
+        )
+        
+        
 
         # A cabeca de cor preve somente uma pequena correcao em H e V.
         self.color_head = nn.Sequential(
@@ -660,6 +674,8 @@ class LCWHVINet(nn.Module):
         )
 
         # Inicializacao em zero: a rede comeca como identidade.
+        nn.init.zeros_(self.intensity_residual_head[-1].weight)
+        nn.init.zeros_(self.intensity_residual_head[-1].bias)
         nn.init.zeros_(self.intensity_head[-1].weight)
         nn.init.zeros_(self.intensity_head[-1].bias)
         nn.init.zeros_(self.color_head[-1].weight)
@@ -732,7 +748,15 @@ class LCWHVINet(nn.Module):
 
         # 7. Corrige intensidade por uma curva limitada e iniciada em identidade.
         raw_curve = self.intensity_head(intensity_feat)
-        intensity_out, curve = self.apply_intensity_curve(intensity_in, raw_curve)
+        intensity_curve , curve = self.apply_intensity_curve(intensity_in, raw_curve)
+        
+        #correção espacial adicional limitada a 0.1
+        
+        residual_i = 0.1 * torch.tanh(self.intensity_residual_head(intensity_feat))
+        intensity_out = (intensity_curve + residual_i).clamp(0.0,1.0)
+        
+        # raw_curve = self.intensity_head(intensity_feat)
+        # intensity_out, curve = self.apply_intensity_curve(intensity_in, raw_curve)
 
         # 8. Cor: travada na fase inicial ou corrigida por delta pequeno e limitado.
         raw_delta_hv = self.color_head(color_feat)

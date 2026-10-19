@@ -101,7 +101,7 @@ def get_args():
     parser.add_argument(
         "--lpips_max_size",
         type=int,
-        default=256,
+        default=0,
     )
 
     return parser.parse_args()
