@@ -589,6 +589,20 @@ class LCWHVINet(nn.Module):
         self.curve_steps = int(curve_steps)
         self.curve_scale = float(curve_scale)
 
+        # Resume as features da imagem para orientar a iluminação.
+        self.intensity_global = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(channels, channels, 1),
+            nn.PReLU(num_parameters=channels),
+            nn.Conv2d(channels, channels, 1),
+        )
+
+        # O módulo começa sem modificar as features.
+        nn.init.zeros_(self.intensity_global[-1].weight)
+        nn.init.zeros_(self.intensity_global[-1].bias)
+
+
+
         # Converte RGB <-> HVI.
         self.hvi = HVITransform(density_k=hvi_k, learnable_k=learnable_hvi_k)
 
@@ -743,6 +757,10 @@ class LCWHVINet(nn.Module):
         color_feat = self.color_body(color_feat)
         intensity_feat = self.intensity_body(intensity_feat)
 
+        global_context = self.intensity_global(intensity_feat)
+
+        intensity_feat = intensity_feat + global_context
+        
         # 6. Interacao controlada entre os dois ramos.
         color_feat, intensity_feat = self.cross_fusion(color_feat, intensity_feat)
 
@@ -754,6 +772,10 @@ class LCWHVINet(nn.Module):
         
         residual_i = 0.1 * torch.tanh(self.intensity_residual_head(intensity_feat))
         intensity_out = (intensity_curve + residual_i).clamp(0.0,1.0)
+        
+        
+        color_feat = self.color_body(color_feat)
+        intensity_feat = self.intensity_body(intensity_feat)
         
         # raw_curve = self.intensity_head(intensity_feat)
         # intensity_out, curve = self.apply_intensity_curve(intensity_in, raw_curve)
