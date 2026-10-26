@@ -608,7 +608,7 @@ class LCWHVINet(nn.Module):
 
         # Embedding da cor: recebe H e V.
         self.color_embed = nn.Sequential(
-            nn.Conv2d(2, channels, 3, padding=1, bias=bias),
+            nn.Conv2d(3, channels, 3, padding=1, bias=bias),
             nn.PReLU(num_parameters=channels),
             # nn.PReLU() Aplicar o RELU e posteriomente o PReLU
         )
@@ -774,14 +774,12 @@ class LCWHVINet(nn.Module):
         intensity_out = (intensity_curve + residual_i).clamp(0.0,1.0)
         
         
-        color_feat = self.color_body(color_feat)
-        intensity_feat = self.intensity_body(intensity_feat)
-        
         # raw_curve = self.intensity_head(intensity_feat)
         # intensity_out, curve = self.apply_intensity_curve(intensity_in, raw_curve)
 
         # 8. Cor: travada na fase inicial ou corrigida por delta pequeno e limitado.
         raw_delta_hv = self.color_head(color_feat)
+        
         if self.color_mode == "lock":
             delta_hv = raw_delta_hv * 0.0
         else:
