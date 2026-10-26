@@ -12,7 +12,7 @@ from torchvision.transforms.functional import to_pil_image, pil_to_tensor
 from models.lcw_hvi_backbone import LCWHVINet
 from dataload.llie_dataset import DATASET_CHOICES, IMAGE_EXTENSIONS, resolve_dataset_paths
 
-ARCHITECTURE_VERSION = "LCWHVINet_HVI"
+ARCHITECTURE_VERSION = "LCWHVINet_HVI_INTENSITY_HEAD_RESIDUAL_EXTRA"
 
 
 # Argumentos da inferência.
