@@ -730,7 +730,10 @@ class LCWHVINet(nn.Module):
         intensity_in = hvi_in[:, 2:3]
 
         # 2. Extrai features independentes de cor e intensidade.
-        color_feat = self.color_embed(hv_in)
+        color_input = torch.cat([hv_in, intensity_in], dim=1)
+        color_feat = self.color_embed(color_input)
+        
+        # color_feat = self.color_embed(hv_in)
         intensity_feat = self.intensity_embed(intensity_in)
 
         # 3. Wavelet adiciona frequencia somente ao ramo de intensidade.
