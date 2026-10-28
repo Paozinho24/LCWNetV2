@@ -33,17 +33,24 @@ class HVITransform(nn.Module):
             self.density_k = nn.Parameter(torch.tensor([density_k], dtype=torch.float32))
         else:
             self.register_buffer("density_k", torch.tensor([density_k], dtype=torch.float32))
+            
+    @staticmethod
+    def limit_chroma_vector(hv, eps=1e-8):
+        magnitude = torch.sqrt(
+        hv.pow(2).sum(dim=1,keepdim=True)+ eps)
+        scale = torch.clamp(1.0 / magnitude,max=1.0)
+        return hv * scale
+    
+    
 
     def current_k(self):
         # Evita valores nao positivos caso k seja aprendivel.
-        
         return self.density_k.clamp_min(1e-3)
 
     def color_sensitive_from_intensity(self, intensity):
         # Sensibilidade de cor dependente da intensidade.
         
         #Isso está aplicando a seguinte formula: (sin(intensity * 0.5 * pi) + eps)^k, onde k é um parâmetro de densidade que controla a sensibilidade da cor em relação à intensidade. A função seno é usada para mapear a intensidade para um intervalo de 0 a 1, e o valor resultante é elevado à potência de k para ajustar a sensibilidade da cor.
-        
         
         eps = 1e-8
         
@@ -795,17 +802,31 @@ class LCWHVINet(nn.Module):
         # raw_curve = self.intensity_head(intensity_feat)
         # intensity_out, curve = self.apply_intensity_curve(intensity_in, raw_curve)
 
-        # 8. Cor: travada na fase inicial ou corrigida por delta pequeno e limitado.
-        raw_delta_hv = self.color_head(color_feat)
+        #Correção cromática independente da intesidade 
         
-        if self.color_mode == "lock":
-            delta_hv = raw_delta_hv * 0.0
-        else:
-            delta_hv = self.color_scale * torch.tanh(raw_delta_hv)
-            
-        #Quefren recomendar usar contatenacao. 
-        hv_out = (hv_in + delta_hv).clamp(-1.0, 1.0)
+        color_sensitivity = self.hvi.color_sensitive_from_intensity(intensity_in)
+        hv_normalized_in = hv_in / (color_sensitivity + 1e-8)
+        hv_normalized_in = self.hvi.limit_chroma_vector(hv_normalized_in)
+        
+        # Prediz correção no espaço cromático normalizado.
+        raw_delta_hv_normalized = (self.color_head(color_feat))
 
+        if self.color_mode == "lock":
+            delta_hv_normalized = (raw_delta_hv_normalized* 0.0)
+        else:
+            delta_hv_normalized = (self.color_scale* torch.tanh(raw_delta_hv_normalized))
+
+        # Aplica correção à cromaticidade.
+        hv_normalized_out = (hv_normalized_in+ delta_hv_normalized)
+        hv_normalized_out = (self.hvi.limit_chroma_vector(hv_normalized_out))
+
+        # Reintroduz a modulação usando agora I_out.
+        color_sensitive_out = (self.hvi.color_sensitive_from_intensity(intensity_out))
+
+        hv_out = (hv_normalized_out* color_sensitive_out).clamp(-1.0,1.0)
+        # Delta efetivo no espaço HVI original.
+        delta_hv = (hv_out - hv_in)
+                
         # 9. Junta H, V e I corrigidos e volta para RGB.
         hvi_out = torch.cat([hv_out, intensity_out], dim=1)
         output = self.hvi.hvi_to_rgb(hvi_out).clamp(0.0, 1.0)
@@ -832,6 +853,9 @@ class LCWHVINet(nn.Module):
                 "intensity_out": intensity_out,
                 "curve": curve,
                 "delta_hv": delta_hv,
+                "delta_hv_normalized": delta_hv_normalized,
+                "hv_normalized_in": hv_normalized_in,
+                "hv_normalized_out": hv_normalized_out,
             }
             return output, aux
 
