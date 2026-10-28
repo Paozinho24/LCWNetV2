@@ -36,7 +36,22 @@ class HVITransform(nn.Module):
 
     def current_k(self):
         # Evita valores nao positivos caso k seja aprendivel.
+        
         return self.density_k.clamp_min(1e-3)
+
+    def color_sensitive_from_intensity(self, intensity):
+        # Sensibilidade de cor dependente da intensidade.
+        
+        #Isso está aplicando a seguinte formula: (sin(intensity * 0.5 * pi) + eps)^k, onde k é um parâmetro de densidade que controla a sensibilidade da cor em relação à intensidade. A função seno é usada para mapear a intensidade para um intervalo de 0 a 1, e o valor resultante é elevado à potência de k para ajustar a sensibilidade da cor.
+        
+        
+        eps = 1e-8
+        
+        intesity = intensity.clamp(0.0, 1.0)
+        k = self.current_k().to(device=intensity.device, dtype=intensity.dtype)
+        color_sensitive = (torch.sin(intesity * 0.5 * math.pi) + eps).pow(k)
+        
+        return color_sensitive
 
     def rgb_to_hvi(self, img):
         # A transformacao HVI foi definida para RGB em [0,1].
