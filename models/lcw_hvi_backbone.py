@@ -85,8 +85,7 @@ class HVITransform(nn.Module):
         intensity = value.unsqueeze(1)
 
         # Sensibilidade de cor dependente da intensidade.
-        k = self.current_k().to(device=img.device, dtype=img.dtype)
-        color_sensitive = (torch.sin(intensity * 0.5 * math.pi) + eps).pow(k)
+        color_sensitive = self.color_sensitive_from_intensity(intensity)
 
         # Hue polarizado em dois eixos: Horizontal e Vertical.
         angle = 2.0 * math.pi * hue
@@ -102,8 +101,9 @@ class HVITransform(nn.Module):
         intensity = hvi[:, 2].clamp(0.0, 1.0)
 
         # Remove a modulacao de intensidade usada na transformacao direta.
-        k = self.current_k().to(device=hvi.device, dtype=hvi.dtype)
-        color_sensitive = (torch.sin(intensity * 0.5 * math.pi) + eps).pow(k)
+        color_sensitive = self.color_sensitive_from_intensity(intensity)
+        
+        
         h_norm = h_channel / (color_sensitive + eps)
         v_norm = v_channel / (color_sensitive + eps)
         h_norm = h_norm.clamp(-1.0, 1.0)
