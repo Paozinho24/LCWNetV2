@@ -21,7 +21,7 @@ from models.lcw_hvi_backbone import LCWHVINet
 from models.loss_hvi import LCWHVITotalLoss
 from dataload.llie_dataset import DATASET_CHOICES, build_datasets_from_args
 
-ARCHITECTURE_VERSION = "LCWHVINet_HVI_TESTE_17"
+ARCHITECTURE_VERSION = "LCWHVINet_HVI_TESTE_24_E3"
 
 LOSS_KEYS = (
     "loss_total", "loss_rgb",'loss_mse', "loss_intensity", "loss_hv", "loss_chroma",
@@ -50,24 +50,11 @@ def get_args():
     parser.add_argument("--val_gt_path", type=str, default="")
     parser.add_argument("--recursive_dataset", action="store_true")
     parser.add_argument("--patch_size", type=int, default=128)
-    parser.add_argument(
-        "--patches_per_image",
-        type=int,
-        default=0,
-        help=(
-            "quantidade virtual de crops por imagem; "
-            "0 usa automaticamente 1 para LSD e 16 para LOL"
-        ),
-    )
+    parser.add_argument("--patches_per_image",type=int,default=0,help=("quantidade virtual de crops por imagem; ""0 usa automaticamente 1 para LSD e 16 para LOL"),)
     parser.add_argument("--disable_augmentation", action="store_true")
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--num_workers", type=int, default=8)
-    parser.add_argument(
-        "--log_interval",
-        type=int,
-        default=100,
-        help="mostra o progresso a cada N batches",
-    )
+    parser.add_argument("--log_interval",type=int,default=100,help="mostra o progresso a cada N batches",)
 
     # Validação.
     parser.add_argument("--val_every", type=int, default=1)
@@ -88,10 +75,7 @@ def get_args():
     parser.add_argument("--curve_steps", type=int, default=4)
     parser.add_argument("--curve_scale", type=float, default=1.0)
     parser.add_argument("--hvi_k", type=float, default=0.2)
-    parser.add_argument(
-        "--layernorm_type", type=str, default="WithBias",
-        choices=["WithBias", "BiasFree"],
-    )
+    parser.add_argument("--layernorm_type", type=str, default="WithBias",choices=["WithBias", "BiasFree"],)
     parser.add_argument("--bias", action="store_true")
 
     # Loss.

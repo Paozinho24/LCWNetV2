@@ -4,21 +4,6 @@ import torchvision.ops as ops
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-
-# Ideia principal:
-# 1. A imagem RGB entra no intervalo [0,1].
-# 2. RGB e convertido para HVI, separando cor (H,V) e intensidade (I).
-# 3. A intensidade recebe informacao Wavelet e um ramo Restormer proprio.
-# 4. A cor recebe um ramo Restormer separado.
-# 5. Os dois ramos trocam informacao por uma fusao residual controlada.
-# 6. A intensidade e corrigida por uma curva limitada, iniciada em identidade.
-# 7. A cor pode ficar travada ou receber apenas uma pequena correcao limitada.
-# 8. HVI e convertido novamente para RGB e limitado a [0,1].
-#
-
-
-
 # HVI: conversao RGB <-> HVI
 # Baseada na transformacao oficial do HVI-CIDNet, com uma adaptacao de
 # estabilidade: k pode ficar fixo durante os primeiros experimentos.
@@ -365,11 +350,6 @@ class IntensityWaveletBranch(nn.Module):
 
         return wave[:,:,:h0,:w0]
 
-
-
-
-
-
 # class IntensityWaveletBranch(nn.Module):
 #     def __init__(self, channels):
 #         super().__init__()
@@ -401,32 +381,27 @@ class IntensityWaveletBranch(nn.Module):
 #         return wave[:, :, :h0, :w0]
     
 
-
 class CrossBranchFusion(nn.Module):
-    def __init__(
-        self,
-        channels,
-        scale=0.1
-    ):
+    def __init__(self, channels, scale=0.2):
         super().__init__()
 
         self.scale = float(scale)
 
-        # Intensidade -> cor
+        # Intensidade -> Cor
         self.intensity_to_color = nn.Conv2d(
             channels,
             channels,
             kernel_size=1
         )
 
-        # Cor -> intensidade
+        # Cor -> Intensidade
         self.color_to_intensity = nn.Conv2d(
             channels,
             channels,
             kernel_size=1
         )
 
-        # A interação começa desligada
+        # Inicialização em zero
         nn.init.zeros_(
             self.intensity_to_color.weight
         )
@@ -448,7 +423,6 @@ class CrossBranchFusion(nn.Module):
         color_feat,
         intensity_feat
     ):
-
         # Intensidade influencia cor
         color_update = (
             self.intensity_to_color(
@@ -463,15 +437,23 @@ class CrossBranchFusion(nn.Module):
             )
         )
 
-        color_feat = (color_feat + self.scale * color_update)
+        color_feat = (
+            color_feat
+            + self.scale
+            * color_update
+        )
 
-        intensity_feat = (intensity_feat + self.scale * intensity_update)
+        intensity_feat = (
+            intensity_feat
+            + self.scale
+            * intensity_update
+        )
 
         return (
             color_feat,
             intensity_feat
         )
-
+     
 
 
 
@@ -698,8 +680,6 @@ class LCWHVINet(nn.Module):
 
     def current_hvi_k(self):
         return self.hvi.current_k()
-
-
 
     # def apply_intensity_curve(self, intensity, raw_curve):
     #     # tanh limita a curva. Com raw_curve=0, a transformacao e identidade.

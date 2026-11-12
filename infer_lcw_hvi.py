@@ -12,7 +12,7 @@ from torchvision.transforms.functional import to_pil_image, pil_to_tensor
 from models.lcw_hvi_backbone import LCWHVINet
 from dataload.llie_dataset import DATASET_CHOICES, IMAGE_EXTENSIONS, resolve_dataset_paths
 
-ARCHITECTURE_VERSION = "LCWHVINet_HVI_TESTE_17"
+ARCHITECTURE_VERSION = "LCWHVINet_HVI_TESTE_24_E3"
 
 
 # Argumentos da inferência.
@@ -23,19 +23,10 @@ def get_args():
     )
 
     # Checkpoint e dataset.
-    parser.add_argument("--checkpoint", type=str, required=True)
-    parser.add_argument(
-        "--dataset_root",
-        type=str,
-        default="/home/unicornio/User/DataSetsLLIE",
-    )
-    parser.add_argument(
-        "--dataset_name",
-        type=str,
-        default="lsd",
-        choices=DATASET_CHOICES,
-    )
-    parser.add_argument("--val_subset", type=str, default="DEI")
+    parser.add_argument("--checkpoint", type=str, required=True, default="/home/unicornio/User/LCWHVI/ckpt/LCWHVINet_lolv1_teste20/best_psnr.pth")
+    parser.add_argument("--dataset_root",type=str,default="/home/unicornio/User/DataSetsLLIE",)
+    parser.add_argument("--dataset_name",type=str,default="lolv1",choices=DATASET_CHOICES,)
+    parser.add_argument("--val_subset", type=str, default="eval15")
 
     # Se input_path estiver vazio, usa automaticamente a validação do dataset.
     parser.add_argument("--input_path", type=str, default="")
