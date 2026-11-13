@@ -678,15 +678,15 @@ class LCWHVINet(nn.Module):
             nn.Conv2d(channels, 2, 3, padding=1, bias=True),
         )
 
-        # Inicializacao em zero: a rede comeca como identidade.
-        nn.init.zeros_(self.intensity_residual_head[-1].weight)
-        nn.init.zeros_(self.intensity_residual_head[-1].bias)
-        nn.init.zeros_(self.intensity_head[-1].weight)
-        nn.init.zeros_(self.intensity_head[-1].bias)
-        nn.init.zeros_(self.color_head[-1].weight)
-        nn.init.zeros_(self.color_head[-1].bias)
-        nn.init.zeros_(self.curve_gate_head[-1].weight)
-        nn.init.zeros_(self.curve_gate_head[-1].bias)
+        # # Inicializacao em zero: a rede comeca como identidade.
+        # nn.init.zeros_(self.intensity_residual_head[-1].weight)
+        # nn.init.zeros_(self.intensity_residual_head[-1].bias)
+        # nn.init.zeros_(self.intensity_head[-1].weight)
+        # nn.init.zeros_(self.intensity_head[-1].bias)
+        # nn.init.zeros_(self.color_head[-1].weight)
+        # nn.init.zeros_(self.color_head[-1].bias)
+        # nn.init.zeros_(self.curve_gate_head[-1].weight)
+        # nn.init.zeros_(self.curve_gate_head[-1].bias)
         
         
         #Tentar utilizar outros inicializadores nas cabeças 
