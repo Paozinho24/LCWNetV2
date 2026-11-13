@@ -644,10 +644,19 @@ class LCWHVINet(nn.Module):
         
         
         self.intensity_head = nn.Sequential(
-            nn.Conv2d(channels,channels,3,padding=1,bias=bias),
+            nn.Conv2d(channels,channels, 3 ,padding=1, bias=bias),
             nn.PReLU(num_parameters=channels),
             nn.Conv2d(channels, self.curve_steps,3,padding=1,bias=True),
         )
+        
+        #Adição do gate adaptativo das curvas de intensidade, para cada curva a para cada pixel , prediz quanto aquela etapa deve realmente atuar
+        
+        self.curve_gate_head = nn.Sequential(
+            nn.Conv2d(channels,channels, 3 ,padding=1, bias=bias),
+            nn.PReLU(num_parameters=channels),
+            nn.Conv2d(channels, self.curve_steps, 3 , padding=1, bias=True),
+        )
+        
         
         
         # Adicionando uma cabeça residual extra para o ramo de intensidade para pequenas correções de intensidade, caso necessário por causa da transformação matemática. 
@@ -676,6 +685,10 @@ class LCWHVINet(nn.Module):
         nn.init.zeros_(self.intensity_head[-1].bias)
         nn.init.zeros_(self.color_head[-1].weight)
         nn.init.zeros_(self.color_head[-1].bias)
+        nn.init.zeros_(self.curve_gate_head[-1].weight)
+        nn.init.zeros_(self.curve_gate_head[-1].bias)
+        
+        
         #Tentar utilizar outros inicializadores nas cabeças 
 
     def current_hvi_k(self):
@@ -690,14 +703,14 @@ class LCWHVINet(nn.Module):
     #         enhanced = enhanced.clamp(0.0, 1.0)
     #     return enhanced, curve
 
-    def apply_intensity_curve(self,intensity,raw_curve):
-        curves = (self.curve_scale* torch.tanh(raw_curve))
-        enhanced = intensity
-        for step in range(self.curve_steps):
-            curve = curves[:,step:step + 1,:,:]
-            enhanced = (enhanced + curve* enhanced* (1.0 - enhanced))
+    # def apply_intensity_curve(self,intensity,raw_curve):
+    #     curves = (self.curve_scale* torch.tanh(raw_curve))
+    #     enhanced = intensity
+    #     for step in range(self.curve_steps):
+    #         curve = curves[:,step:step + 1,:,:]
+    #         enhanced = (enhanced + curve* enhanced* (1.0 - enhanced))
 
-        return enhanced, curves
+    #     return enhanced, curves
 
 
     def forward(self, img, return_aux=False):
