@@ -770,11 +770,19 @@ class LCWHVINet(nn.Module):
         # 6. Interacao controlada entre os dois ramos.
         color_feat, intensity_feat = self.cross_fusion(color_feat, intensity_feat)
 
-        # 7. Corrige intensidade por uma curva limitada e iniciada em identidade.
+        # Predição das curvas.
+
         raw_curve = self.intensity_head(intensity_feat)
-        
-        raw_gate = self.curve_gate_head(intensity_feat)
-        intensity_curve , curve, gate = self.apply_intensity_curve(intensity_in, raw_curve, raw_gate)
+       
+        # Predição dos gates adaptativos.
+
+        raw_curve_gate = (self.curve_gate_head(intensity_feat))
+
+       
+        # Aplicação sequencial:
+        # curva + gate.
+      
+        intensity_curve,curve,curve_gate = self.apply_intensity_curve(intensity_in,raw_curve,raw_curve_gate,)
         
         #correção espacial adicional limitada a 0.1
         
@@ -810,6 +818,7 @@ class LCWHVINet(nn.Module):
             self.debug_intensity_out = intensity_out.detach()
             self.debug_curve = curve.detach()
             self.debug_delta_hv = delta_hv.detach()
+            self.debug_curve_gate = (curve_gate.detach())
 
         # Durante o treinamento, retorna variaveis auxiliares para losses HVI.
         if return_aux:
@@ -821,7 +830,9 @@ class LCWHVINet(nn.Module):
                 "intensity_in": intensity_in,
                 "intensity_out": intensity_out,
                 "curve": curve,
+                "curve_gate": curve_gate,
                 "delta_hv": delta_hv,
+
             }
             return output, aux
 
