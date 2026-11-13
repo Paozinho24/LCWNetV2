@@ -668,8 +668,6 @@ class LCWHVINet(nn.Module):
             nn.Conv2d(channels, 1, kernel_size=3, padding=1, bias=True),
 
         )
-        
-        
 
         # A cabeca de cor preve somente uma pequena correcao em H e V.
         self.color_head = nn.Sequential(
@@ -711,6 +709,18 @@ class LCWHVINet(nn.Module):
     #         enhanced = (enhanced + curve* enhanced* (1.0 - enhanced))
 
     #     return enhanced, curves
+    
+    def apply_intensity_curve(self, intensity, raw_curve, raw_gate):
+        curves = self.curve_scale * torch.tanh(raw_curve)
+        gates = torch.sigmoid(raw_gate)  # Gating values between 0 and 1
+        enhanced = intensity
+        for step in range(self.curve_steps):
+            curve = curves[:, step:step + 1, :, :]
+            gate = gates[:, step:step + 1, :, :]
+            enhanced = enhanced + gate * curve * enhanced * (1.0 - enhanced)
+            enhanced = enhanced.clamp(0.0, 1.0)
+        return enhanced, curves, gates
+        
 
 
     def forward(self, img, return_aux=False):
@@ -762,7 +772,9 @@ class LCWHVINet(nn.Module):
 
         # 7. Corrige intensidade por uma curva limitada e iniciada em identidade.
         raw_curve = self.intensity_head(intensity_feat)
-        intensity_curve , curve = self.apply_intensity_curve(intensity_in, raw_curve)
+        
+        raw_gate = self.curve_gate_head(intensity_feat)
+        intensity_curve , curve, gate = self.apply_intensity_curve(intensity_in, raw_curve, raw_gate)
         
         #correção espacial adicional limitada a 0.1
         
