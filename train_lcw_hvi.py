@@ -21,7 +21,7 @@ from models.lcw_hvi_backbone import LCWHVINet
 from models.loss_hvi import LCWHVITotalLoss
 from dataload.llie_dataset import DATASET_CHOICES, build_datasets_from_args
 
-ARCHITECTURE_VERSION = "LCWHVINet_HVI_TESTE_24_E3"
+ARCHITECTURE_VERSION = "LCWHVINet_HVI_TESTE_25_E3"
 
 LOSS_KEYS = (
     "loss_total", "loss_rgb",'loss_mse', "loss_intensity", "loss_hv", "loss_chroma",

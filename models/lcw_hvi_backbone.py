@@ -277,7 +277,6 @@ class IntensityWaveletBranch(nn.Module):
         super().__init__()
 
         self.dwt = HaarDWT()
-
         self.band_fusion = nn.Sequential(
             nn.Conv2d(4,channels,3,padding=1),
             nn.PReLU(num_parameters=channels),
@@ -454,8 +453,6 @@ class CrossBranchFusion(nn.Module):
             intensity_feat
         )
      
-
-
 
 # Fusao controlada entre os ramos de cor e intensidade.
 # As convolucoes de troca comecam em zero, entao a arquitetura inicia com
