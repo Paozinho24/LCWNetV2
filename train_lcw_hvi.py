@@ -18,10 +18,16 @@ from torch.optim.lr_scheduler import (LinearLR, CosineAnnealingLR, SequentialLR,
 
 
 from models.lcw_hvi_backbone import LCWHVINet
+from models.lcw_hvi_unet import LCWHVIUNet
 from models.loss_hvi import LCWHVITotalLoss
 from dataload.llie_dataset import DATASET_CHOICES, build_datasets_from_args
 
-ARCHITECTURE_VERSION = "LCWHVINet_HVI_TESTE_17"
+ARCHITECTURE_VERSION = "LCWHVINet_HVI_TESTE_17"  # modelo original
+UNET_ARCHITECTURE_VERSION = "LCWHVIUNet_HVI_V1"
+
+
+def architecture_version(architecture):
+    return UNET_ARCHITECTURE_VERSION if architecture == "unet" else ARCHITECTURE_VERSION
 
 LOSS_KEYS = (
     "loss_total", "loss_rgb",'loss_mse', "loss_intensity", "loss_hv", "loss_chroma",
@@ -39,6 +45,15 @@ def get_args():
     # Execução.
     parser.add_argument("--seed", type=int, default=443)
     parser.add_argument("--disable_ddp", action="store_true")
+    
+    #Escolha da arquitetura
+    parser.add_argument("--architecture",choices=["original", "unet"], default="unet")
+    parser.add_argument("--unet_channels",type=int,nargs=4,default=[64, 64, 128, 192])
+
+    parser.add_argument("--unet_heads",type=int,nargs=4,default=[4, 4, 4, 4])
+
+    parser.add_argument("--unet_depths",type=int,nargs=4,default=[1, 1, 1, 2])
+    parser.add_argument("--unet_decoder_depth",type=int,default=1)
 
     # Dataset.
     parser.add_argument("--dataset_root", type=str, default="/home/unicornio/User/DataSetsLLIE")
@@ -124,7 +139,7 @@ def get_args():
     # Checkpoints.
     parser.add_argument(
         "--checkpoints_dir", type=str,
-        default="/home/unicornio/User/LCWNet/ckpt/LCWHVINet",
+        default=None,  # definido por arquitetura no main; evita sobrescrever checkpoints
     )
     parser.add_argument("--save_every", type=int, default=1)
     parser.add_argument("--resume", type=str, default="")
@@ -134,6 +149,13 @@ def get_args():
 
 # Valida os argumentos antes de iniciar o treino.
 def validate_args(args):
+    if args.architecture == "unet":
+        if any(c <= 0 or h <= 0 or c % h for c, h in zip(args.unet_channels, args.unet_heads)):
+            raise ValueError("Na U-Net, cada número de canais deve ser positivo e divisível pelo número de heads.")
+        if any(d <= 0 for d in args.unet_depths) or args.unet_decoder_depth <= 0:
+            raise ValueError("As profundidades da U-Net devem ser positivas.")
+        if args.patch_size < 8:
+            raise ValueError("A U-Net exige --patch_size >= 8 para três downsamplings.")
     if args.channels <= 0:
         raise ValueError("channels precisa ser maior que zero.")
     if args.num_heads <= 0 or args.channels % args.num_heads != 0:
@@ -746,7 +768,8 @@ def validate_one_epoch(
 
 # Configuração que não pode mudar ao usar --resume.
 def structural_config(args):
-    return {
+    # Preserva o formato original para checkpoints da LCWHVINet antiga.
+    config = {
         "channels": args.channels,
         "num_heads": args.num_heads,
         "depth": args.depth,
@@ -759,6 +782,15 @@ def structural_config(args):
         "layernorm_type": args.layernorm_type,
         "bias": args.bias,
     }
+    if args.architecture == "unet":
+        config.update({
+            "architecture": "unet",
+            "unet_channels": list(args.unet_channels),
+            "unet_heads": list(args.unet_heads),
+            "unet_depths": list(args.unet_depths),
+            "unet_decoder_depth": args.unet_decoder_depth,
+        })
+    return config
 
 
 # Salva checkpoint completo.
@@ -767,7 +799,7 @@ def save_checkpoint(
     metrics, args, active_color_mode,
 ):
     checkpoint = {
-        "architecture_version": ARCHITECTURE_VERSION,
+        "architecture_version": architecture_version(args.architecture),
         "epoch": epoch,
         "model_state_dict": get_model_module(model).state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
@@ -785,9 +817,9 @@ def load_checkpoint(path, model, optimizer, scheduler, device, args):
     checkpoint = torch.load(path, map_location=device, weights_only=False)
 
     version = checkpoint.get("architecture_version", "")
-    if version != ARCHITECTURE_VERSION:
+    if version != architecture_version(args.architecture):
         raise RuntimeError(
-            f"Checkpoint incompatível. Esperado={ARCHITECTURE_VERSION!r}; "
+            f"Checkpoint incompatível. Esperado={architecture_version(args.architecture)!r}; "
             f"encontrado={version or 'não registrado'!r}."
         )
 
@@ -920,6 +952,10 @@ def append_csv(
 
 def main():
     args = get_args()
+    if args.checkpoints_dir is None:
+        base_dir = "/home/unicornio/User/LCWNet/ckpt"
+        folder = "LCWHVIUNet" if args.architecture == "unet" else "LCWHVINet"
+        args.checkpoints_dir = os.path.join(base_dir, folder)
 
     # LSD/PAMAZONIA já são armazenados como patches prontos.
     # LOL usa imagens maiores e pode gerar vários crops virtuais por imagem.
@@ -988,21 +1024,41 @@ def main():
         # 3. Modelo HVI + Wavelet + Restormer.
         initial_color_mode = runtime_color_mode(args, 0)
 
-        model = LCWHVINet(
-            channels=args.channels,
-            num_heads=args.num_heads,
-            depth=args.depth,
-            expansion_factor=args.expansion_factor,
-            wavelet_mode=args.wavelet_mode,
-            color_mode=initial_color_mode,
-            color_scale=args.color_scale,
-            curve_steps=args.curve_steps,
-            curve_scale=args.curve_scale,
-            hvi_k=args.hvi_k,
-            learnable_hvi_k=False,
-            layernorm_type=args.layernorm_type,
-            bias=args.bias,
-        ).to(device)
+        if args.architecture == "unet":
+            model = LCWHVIUNet(
+                channels=args.unet_channels,
+                num_heads=args.unet_heads,
+                encoder_depths=args.unet_depths,
+                decoder_depth=args.unet_decoder_depth,
+                expansion_factor=args.expansion_factor,
+                wavelet_mode=args.wavelet_mode,
+                color_mode=initial_color_mode,
+                color_scale=args.color_scale,
+                curve_steps=args.curve_steps,
+                curve_scale=args.curve_scale,
+                hvi_k=args.hvi_k,
+                learnable_hvi_k=False,
+                layernorm_type=args.layernorm_type,
+                bias=args.bias,
+            ).to(device)
+        else:
+            model = LCWHVINet(
+                channels=args.channels,
+                num_heads=args.num_heads,
+                depth=args.depth,
+                expansion_factor=args.expansion_factor,
+                wavelet_mode=args.wavelet_mode,
+                color_mode=initial_color_mode,
+                color_scale=args.color_scale,
+                curve_steps=args.curve_steps,
+                curve_scale=args.curve_scale,
+                hvi_k=args.hvi_k,
+                learnable_hvi_k=False,
+                layernorm_type=args.layernorm_type,
+                bias=args.bias,
+            ).to(device)
+        
+        
 
         if use_ddp and world_size > 1:
             model = DDP(
@@ -1103,6 +1159,7 @@ def main():
         if rank == 0:
             print("\n" + "=" * 80)
             print("TREINAMENTO LCWHVINet — HVI + WAVELET + RESTORMER")
+            print(f"Arquitetura:           {args.architecture} ({architecture_version(args.architecture)})")
             print(f"Dataset:               {args.dataset_name}")
             print(f"Treino LOW:            {dataset_paths['train_low']}")
             print(f"Treino GT:             {dataset_paths['train_gt']}")
@@ -1118,9 +1175,11 @@ def main():
             print(f"GPUs/processos DDP:    {world_size}")
             print(f"GPUs CUDA visíveis:    {torch.cuda.device_count() if torch.cuda.is_available() else 0}")
             print(f"Log a cada:            {args.log_interval} batches")
-            print(f"Channels:              {args.channels}")
-            print(f"Depth:                 {args.depth}")
-            print(f"Heads:                 {args.num_heads}")
+            print(f"Channels:              {args.unet_channels if args.architecture == 'unet' else args.channels}")
+            print(f"Depth:                 {args.unet_depths if args.architecture == 'unet' else args.depth}")
+            print(f"Heads:                 {args.unet_heads if args.architecture == 'unet' else args.num_heads}")
+            if args.architecture == "unet":
+                print(f"Decoder depth:         {args.unet_decoder_depth}")
             print(f"Wavelet:               {args.wavelet_mode}")
             print(f"Color mode:            {runtime_color_mode(args, start_epoch)}")
             print(

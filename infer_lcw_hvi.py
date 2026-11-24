@@ -10,9 +10,11 @@ from PIL import Image, ImageOps
 from torchvision.transforms.functional import to_pil_image, pil_to_tensor
 
 from models.lcw_hvi_backbone import LCWHVINet
+from models.lcw_hvi_unet import LCWHVIUNet
 from dataload.llie_dataset import DATASET_CHOICES, IMAGE_EXTENSIONS, resolve_dataset_paths
 
 ARCHITECTURE_VERSION = "LCWHVINet_HVI_TESTE_17"
+UNET_ARCHITECTURE_VERSION = "LCWHVIUNet_HVI_V1"
 
 
 # Argumentos da inferência.
@@ -157,12 +159,13 @@ def load_model(args, device):
 
     version = checkpoint.get("architecture_version", "")
 
-    if version != ARCHITECTURE_VERSION:
+    if version not in {ARCHITECTURE_VERSION, UNET_ARCHITECTURE_VERSION}:
         raise RuntimeError(
-            "Checkpoint incompatível com a LCWHVINet atual. "
-            f"Esperado={ARCHITECTURE_VERSION!r}; "
+            "Checkpoint com versão não suportada. "
+            f"Esperado={ARCHITECTURE_VERSION!r} ou {UNET_ARCHITECTURE_VERSION!r}; "
             f"encontrado={version or 'não registrado'!r}."
         )
+    architecture = "unet" if version == UNET_ARCHITECTURE_VERSION else "original"
 
     config = checkpoint.get("config", {})
 
@@ -191,9 +194,6 @@ def load_model(args, device):
     )
 
     model_config = {
-        "channels": int(config.get("channels", 48)),
-        "num_heads": int(config.get("num_heads", 4)),
-        "depth": int(config.get("depth", 4)),
         "expansion_factor": float(config.get("expansion_factor", 2.66)),
         "wavelet_mode": str(config.get("wavelet_mode", "on")),
         "color_mode": color_mode,
@@ -206,12 +206,27 @@ def load_model(args, device):
         "bias": bool(config.get("bias", False)),
     }
 
-    model = LCWHVINet(**model_config)
+    if architecture == "unet":
+        model_config.update({
+            "channels": list(config.get("unet_channels", [64, 64, 128, 192])),
+            "num_heads": list(config.get("unet_heads", [4, 4, 4, 4])),
+            "encoder_depths": list(config.get("unet_depths", [1, 1, 1, 2])),
+            "decoder_depth": int(config.get("unet_decoder_depth", 1)),
+        })
+        model = LCWHVIUNet(**model_config)
+    else:
+        model_config.update({
+            "channels": int(config.get("channels", 48)),
+            "num_heads": int(config.get("num_heads", 4)),
+            "depth": int(config.get("depth", 4)),
+        })
+        model = LCWHVINet(**model_config)
     model.load_state_dict(clean_state_dict(checkpoint), strict=True)
     model = model.to(device).eval()
 
     info = {
         **model_config,
+        "architecture": architecture,
         "saved_color_mode": saved_color_mode,
         "architecture_version": version,
         "epoch": int(checkpoint.get("epoch", -1)) + 1,
@@ -737,7 +752,7 @@ def main():
     )
 
     print("=" * 84)
-    print("INFERÊNCIA LCWHVINet")
+    print(f"INFERÊNCIA LCWHVINet ({model_info['architecture']})")
     print(f"Checkpoint:          {args.checkpoint}")
     print(f"Época:               {model_info['epoch']}")
     print(f"Versão:              {model_info['architecture_version']}")
@@ -757,7 +772,9 @@ def main():
     print(f"Curve scale:         {model_info['curve_scale']}")
     print(f"HVI k:               {model_info['hvi_k']}")
     print(f"Channels:            {model_info['channels']}")
-    print(f"Depth:               {model_info['depth']}")
+    print(f"Depth:                {model_info.get('depth', model_info.get('encoder_depths'))}")
+    if model_info["architecture"] == "unet":
+        print(f"Decoder depth:        {model_info['decoder_depth']}")
     print(f"Heads:               {model_info['num_heads']}")
     print(f"Parâmetros:          {total_params / 1e6:.3f} M")
     print(f"Treináveis:          {trainable_params / 1e6:.3f} M")
