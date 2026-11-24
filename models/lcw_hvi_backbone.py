@@ -4,25 +4,6 @@ import torchvision.ops as ops
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-
-# Ideia principal:
-# 1. A imagem RGB entra no intervalo [0,1].
-# 2. RGB e convertido para HVI, separando cor (H,V) e intensidade (I).
-# 3. A intensidade recebe informacao Wavelet e um ramo Restormer proprio.
-# 4. A cor recebe um ramo Restormer separado.
-# 5. Os dois ramos trocam informacao por uma fusao residual controlada.
-# 6. A intensidade e corrigida por uma curva limitada, iniciada em identidade.
-# 7. A cor pode ficar travada ou receber apenas uma pequena correcao limitada.
-# 8. HVI e convertido novamente para RGB e limitado a [0,1].
-#
-
-
-
-# HVI: conversao RGB <-> HVI
-# Baseada na transformacao oficial do HVI-CIDNet, com uma adaptacao de
-# estabilidade: k pode ficar fixo durante os primeiros experimentos.
-
 class HVITransform(nn.Module):
     def __init__(self, density_k=0.2, learnable_k=False):
         super().__init__()
@@ -386,10 +367,6 @@ class IntensityWaveletBranch(nn.Module):
         wave = self.refine(wave)
 
         return wave[:,:,:h0,:w0]
-
-
-
-
 
 
 # class IntensityWaveletBranch(nn.Module):
@@ -863,7 +840,7 @@ class LCWHVINet(nn.Module):
 
 
 if __name__ == "__main__":
-    # Teste simples: antes do treinamento a rede deve ficar proxima da identidade.
+    #Para testar 
     model = LCWHVINet(
         channels=48,
         num_heads=4,
