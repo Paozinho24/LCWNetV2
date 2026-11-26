@@ -4,25 +4,6 @@ import torchvision.ops as ops
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-
-# Ideia principal:
-# 1. A imagem RGB entra no intervalo [0,1].
-# 2. RGB e convertido para HVI, separando cor (H,V) e intensidade (I).
-# 3. A intensidade recebe informacao Wavelet e um ramo Restormer proprio.
-# 4. A cor recebe um ramo Restormer separado.
-# 5. Os dois ramos trocam informacao por uma fusao residual controlada.
-# 6. A intensidade e corrigida por uma curva limitada, iniciada em identidade.
-# 7. A cor pode ficar travada ou receber apenas uma pequena correcao limitada.
-# 8. HVI e convertido novamente para RGB e limitado a [0,1].
-#
-
-
-
-# HVI: conversao RGB <-> HVI
-# Baseada na transformacao oficial do HVI-CIDNet, com uma adaptacao de
-# estabilidade: k pode ficar fixo durante os primeiros experimentos.
-
 class HVITransform(nn.Module):
     def __init__(self, density_k=0.2, learnable_k=False):
         super().__init__()
@@ -41,8 +22,6 @@ class HVITransform(nn.Module):
         scale = torch.clamp(1.0 / magnitude,max=1.0)
         return hv * scale
     
-    
-
     def current_k(self):
         # Evita valores nao positivos caso k seja aprendivel.
         return self.density_k.clamp_min(1e-3)
@@ -109,7 +88,6 @@ class HVITransform(nn.Module):
 
         # Remove a modulacao de intensidade usada na transformacao direta.
         color_sensitive = self.color_sensitive_from_intensity(intensity)
-        
         
         h_norm = h_channel / (color_sensitive + eps)
         v_norm = v_channel / (color_sensitive + eps)
@@ -190,8 +168,6 @@ class LayerNorm2D(nn.Module):
             y = y * self.weight
         return y.reshape(b, h, w, c).permute(0, 3, 1, 2).contiguous()
 
-
-
 # MDTA do Restormer: atencao transposta entre canais, sem janelas espaciais.
 # Isso evita a grade fixa de window_size usada pelo Swin.
 
@@ -233,8 +209,6 @@ class RestormerAttention(nn.Module):
         out = out.reshape(b, c, h, w)
         return self.project_out(out)
 
-
-
 # GDFN do Restormer: feed-forward com convolucao depthwise e gating.
 
 class RestormerFeedForward(nn.Module):
@@ -257,9 +231,6 @@ class RestormerFeedForward(nn.Module):
         x1, x2 = self.dwconv(x).chunk(2, dim=1)
         x = F.gelu(x1) * x2
         return self.project_out(x)
-
-
-
 # Bloco Restormer completo: LN -> MDTA -> residual -> LN -> GDFN -> residual.
 
 class RestormerBlock(nn.Module):
@@ -281,9 +252,6 @@ class RestormerBlock(nn.Module):
         x = x + self.attn(self.norm1(x))
         x = x + self.ffn(self.norm2(x))
         return x
-
-
-
 # Haar DWT somente para extracao de informacao de frequencia da intensidade.
 # A DWT nao reconstrui diretamente a imagem final.
 
@@ -298,9 +266,7 @@ class HaarDWT(nn.Module):
         hl = (x00 + x01 - x10 - x11) * 0.5
         hh = (x00 - x01 - x10 + x11) * 0.5
         return ll, lh, hl, hh
-
-
-
+    
 # Ramo Wavelet de intensidade.
 # As quatro bandas viram features auxiliares e depois voltam a HxW por
 # interpolacao bilinear. Elas nao sao somadas diretamente ao RGB final.
@@ -339,9 +305,7 @@ class IntensityWaveletBranch(nn.Module):
     def current_threshold(self):
 
         # Softplus garante:
-        #
         # threshold > 0
-        #
         # sem precisar usar clamp.
         return F.softplus(
             self.detail_threshold_raw
@@ -361,13 +325,13 @@ class IntensityWaveletBranch(nn.Module):
             intensity = F.pad(intensity,(0, pad_w, 0, pad_h),mode=mode)
 
         
-        # 1. Decomposição Wavelet
+        # Decomposição Wavelet
         
         ll, lh, hl, hh = self.dwt(intensity)
 
-        # 2. Threshold aprendido
+        # Threshold aprendido
         threshold = (self.current_threshold().to(dtype=lh.dtype))
-        # 3. Shrinkage somente nas bandas
+        # Shrinkage somente nas bandas
         #    de detalhe
 
         lh = self.soft_threshold(lh, threshold)
@@ -380,49 +344,12 @@ class IntensityWaveletBranch(nn.Module):
         
         wave = self.band_fusion(torch.cat([ll, lh, hl, hh],dim=1))
         
-        # 5. Retorna à resolução original
+        # Retorna à resolução original
 
         wave = F.interpolate(wave,size=intensity.shape[-2:],mode="bilinear",align_corners=False)
         wave = self.refine(wave)
 
         return wave[:,:,:h0,:w0]
-
-
-
-
-
-
-# class IntensityWaveletBranch(nn.Module):
-#     def __init__(self, channels):
-#         super().__init__()
-#         self.dwt = HaarDWT()
-#         self.band_fusion = nn.Sequential(
-#             nn.Conv2d(4, channels, 3, padding=1),
-#             nn.PReLU(num_parameters=channels),
-#             nn.Conv2d(channels, channels, 3, padding=1),
-#         )
-#         self.refine = nn.Sequential(
-#             nn.Conv2d(channels, channels, 3, padding=1),
-#             nn.PReLU(num_parameters=channels),
-#             nn.Conv2d(channels, channels, 3, padding=1),
-#         )
-
-#     def forward(self, intensity):
-#         h0, w0 = intensity.shape[-2:]
-#         pad_h = h0 % 2
-#         pad_w = w0 % 2
-#         if pad_h or pad_w:
-#             mode = "reflect" if h0 > 1 and w0 > 1 else "replicate"
-#             intensity = F.pad(intensity, (0, pad_w, 0, pad_h), mode=mode)
-
-#         ll, lh, hl, hh = self.dwt(intensity)
-        
-#         wave = self.band_fusion(torch.cat([ll, lh, hl, hh], dim=1))
-#         wave = F.interpolate(wave, size=intensity.shape[-2:], mode="bilinear", align_corners=False)
-#         wave = self.refine(wave)
-#         return wave[:, :, :h0, :w0]
-    
-
 
 class CrossBranchFusion(nn.Module):
     def __init__(
@@ -431,36 +358,29 @@ class CrossBranchFusion(nn.Module):
         scale=0.1
     ):
         super().__init__()
-
         self.scale = float(scale)
-
         # Intensidade -> cor
         self.intensity_to_color = nn.Conv2d(
             channels,
             channels,
             kernel_size=1
         )
-
         # Cor -> intensidade
         self.color_to_intensity = nn.Conv2d(
             channels,
             channels,
             kernel_size=1
         )
-
         # A interação começa desligada
         nn.init.zeros_(
             self.intensity_to_color.weight
         )
-
         nn.init.zeros_(
             self.intensity_to_color.bias
         )
-
         nn.init.zeros_(
             self.color_to_intensity.weight
         )
-
         nn.init.zeros_(
             self.color_to_intensity.bias
         )
