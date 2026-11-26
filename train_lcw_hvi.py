@@ -50,24 +50,12 @@ def get_args():
     parser.add_argument("--val_gt_path", type=str, default="")
     parser.add_argument("--recursive_dataset", action="store_true")
     parser.add_argument("--patch_size", type=int, default=128)
-    parser.add_argument(
-        "--patches_per_image",
-        type=int,
-        default=0,
-        help=(
-            "quantidade virtual de crops por imagem; "
-            "0 usa automaticamente 1 para LSD e 16 para LOL"
-        ),
-    )
+    parser.add_argument("--patches_per_image",type=int,default=0,help=("quantidade virtual de crops por imagem; "
+"0 usa automaticamente 1 para LSD e 16 para LOL"),)
     parser.add_argument("--disable_augmentation", action="store_true")
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--num_workers", type=int, default=8)
-    parser.add_argument(
-        "--log_interval",
-        type=int,
-        default=100,
-        help="mostra o progresso a cada N batches",
-    )
+    parser.add_argument("--log_interval",type=int,default=100,help="mostra o progresso a cada N batches",)
 
     # Validação.
     parser.add_argument("--val_every", type=int, default=1)
