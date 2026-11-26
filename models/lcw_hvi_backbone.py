@@ -641,17 +641,6 @@ class LCWHVINet(nn.Module):
     def current_hvi_k(self):
         return self.hvi.current_k()
 
-
-
-    # def apply_intensity_curve(self, intensity, raw_curve):
-    #     # tanh limita a curva. Com raw_curve=0, a transformacao e identidade.
-    #     curve = self.curve_scale * torch.tanh(raw_curve)
-    #     enhanced = intensity
-    #     for _ in range(self.curve_steps):
-    #         enhanced = enhanced + curve * enhanced * (1.0 - enhanced)
-    #         enhanced = enhanced.clamp(0.0, 1.0)
-    #     return enhanced, curve
-
     def apply_intensity_curve(self,intensity,raw_curve):
         curves = (self.curve_scale* torch.tanh(raw_curve))
         enhanced = intensity
@@ -660,7 +649,6 @@ class LCWHVINet(nn.Module):
             enhanced = (enhanced + curve* enhanced* (1.0 - enhanced))
 
         return enhanced, curves
-
 
     def forward(self, img, return_aux=False):
         # A nova arquitetura trabalha exclusivamente em [0,1].

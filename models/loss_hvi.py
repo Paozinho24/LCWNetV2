@@ -2,10 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-try:
-    from models.lcw_hvi_backbone import HVITransform
-except ImportError:
-    from User.LCWNetV2.models.lcw_hvi_backbone import HVITransform
+from models.lcw_hvi_backbone import HVITransform
 
 
 # Perda L1 da imagem RGB final.
@@ -247,11 +244,29 @@ class LCWHVITotalLoss(nn.Module):
         else:
             loss_ssim = output.new_tensor(0.0)
 
-        # No modo lock a cor fica congelada. As losses cromaticas sao apenas medidas.
-        loss_hv = self.hv_loss(aux["hv_out"], hv_target)
-        loss_chroma = self.chroma_loss(aux["hv_out"], hv_target)
-        loss_hue = self.hue_loss(aux["hv_out"], hv_target)
-        loss_color_delta = self.color_delta_loss(aux["delta_hv"])
+        # # No modo lock a cor fica congelada. As losses cromaticas sao apenas medidas.
+        # loss_hv = self.hv_loss(aux["hv_out"], hv_target)
+        # loss_chroma = self.chroma_loss(aux["hv_out"], hv_target)
+        # loss_hue = self.hue_loss(aux["hv_out"], hv_target)
+        
+        # Normalização cromática do Ground Truth.
+        color_sensitivity_target = (self.hvi.color_sensitive_from_intensity(intensity_target))
+        hv_normalized_target = self.hvi.limit_chroma_vector(hv_target / (color_sensitivity_target + 1e-8))
+
+        # Cromaticidade predita pela arquitetura.
+        hv_normalized_pred = aux["hv_normalized_out"]
+
+        # Supervisão cromática independente da intensidade.
+        loss_hv = self.hv_loss(hv_normalized_pred,hv_normalized_target)
+
+        loss_chroma = self.chroma_loss(hv_normalized_pred,hv_normalized_target)
+        loss_hue = self.hue_loss(hv_normalized_pred,hv_normalized_target)
+        loss_color_delta = self.color_delta_loss(hv_normalized_pred -aux["hv_normalized_in"])
+        
+        
+        # loss_color_delta = self.color_delta_loss(aux["delta_hv"])
+        
+        loss_color_delta = self.color_delta_loss(["hv_normalized_out"] - aux["hv_normalized_in"])
 
         color_trainable = self.color_mode == "bounded"
         color_factor = 1.0 if color_trainable else 0.0
@@ -288,7 +303,7 @@ class LCWHVITotalLoss(nn.Module):
 
 
 if __name__ == "__main__":
-    from User.LCWNetV2.models.lcw_hvi_backbone import LCWHVINet
+    from models.lcw_hvi_backbone import LCWHVINet
 
     model = LCWHVINet(
         channels=24,
