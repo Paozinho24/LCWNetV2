@@ -213,6 +213,9 @@ class LCWHVITotalLoss(nn.Module):
             "intensity_out",
             "curve",
             "delta_hv",
+            "hv_normalized_in",
+            "hv_normalized_out",
+            "delta_hv_normalized",
         }
         missing = required_keys.difference(aux.keys())
         if missing:
@@ -266,7 +269,7 @@ class LCWHVITotalLoss(nn.Module):
         
         # loss_color_delta = self.color_delta_loss(aux["delta_hv"])
         
-        loss_color_delta = self.color_delta_loss(["hv_normalized_out"] - aux["hv_normalized_in"])
+        loss_color_delta = self.color_delta_loss(aux["hv_normalized_out"] - aux["hv_normalized_in"])
 
         color_trainable = self.color_mode == "bounded"
         color_factor = 1.0 if color_trainable else 0.0
