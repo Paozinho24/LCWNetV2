@@ -14,7 +14,6 @@ class HVITransform(nn.Module):
             self.density_k = nn.Parameter(torch.tensor([density_k], dtype=torch.float32))
         else:
             self.register_buffer("density_k", torch.tensor([density_k], dtype=torch.float32))
-<<<<<<< HEAD
             
     @staticmethod
     def limit_chroma_vector(hv, eps=1e-8):
@@ -23,9 +22,6 @@ class HVITransform(nn.Module):
         scale = torch.clamp(1.0 / magnitude,max=1.0)
         return hv * scale
     
-=======
-
->>>>>>> parent of a60fa95 (Adicionado o delta ao dicionário)
     def current_k(self):
         # Evita valores nao positivos caso k seja aprendivel.
         
@@ -357,38 +353,187 @@ class IntensityWaveletBranch(nn.Module):
 
         return wave[:,:,:h0,:w0]
 
-class CrossBranchFusion(nn.Module):
+class CrossChannelAttention(nn.Module):
+
     def __init__(
         self,
         channels,
-        scale=0.1
+        num_heads=4,
+        bias=False
     ):
         super().__init__()
+
+        if channels % num_heads != 0:
+            raise ValueError(
+                "channels deve ser divisível por num_heads"
+            )
+
+        self.num_heads = num_heads
+
+        self.temperature = nn.Parameter(
+            torch.ones(num_heads, 1, 1)
+        )
+
+        # Query: ramo que receberá a informação.
+        self.q = nn.Conv2d(
+            channels,
+            channels,
+            kernel_size=1,
+            bias=bias
+        )
+
+        self.q_dwconv = nn.Conv2d(
+            channels,
+            channels,
+            kernel_size=3,
+            padding=1,
+            groups=channels,
+            bias=bias
+        )
+
+        # Key e Value: ramo fornecedor da informação.
+        self.kv = nn.Conv2d(
+            channels,
+            channels * 2,
+            kernel_size=1,
+            bias=bias
+        )
+
+        self.kv_dwconv = nn.Conv2d(
+            channels * 2,
+            channels * 2,
+            kernel_size=3,
+            padding=1,
+            groups=channels * 2,
+            bias=bias
+        )
+
+        self.project_out = nn.Conv2d(
+            channels,
+            channels,
+            kernel_size=1,
+            bias=bias
+        )
+
+        # A nova atenção começa sem alterar a fusão original.
+        nn.init.zeros_(self.project_out.weight)
+
+        if self.project_out.bias is not None:
+            nn.init.zeros_(self.project_out.bias)
+
+    def forward(self, target, source):
+
+        b, c, h, w = target.shape
+
+        head_dim = c // self.num_heads
+
+        # Extração de Query do ramo de destino.
+        q = self.q_dwconv(
+            self.q(target)
+        )
+
+        # Extração de Key e Value do outro ramo.
+        kv = self.kv_dwconv(
+            self.kv(source)
+        )
+
+        k, v = kv.chunk(2, dim=1)
+
+        # Separação das cabeças de atenção.
+        q = q.reshape(
+            b, self.num_heads, head_dim, h * w
+        )
+
+        k = k.reshape(
+            b, self.num_heads, head_dim, h * w
+        )
+
+        v = v.reshape(
+            b, self.num_heads, head_dim, h * w
+        )
+
+        # Normalização ao longo da dimensão espacial.
+        q = F.normalize(q, dim=-1, eps=1e-6)
+        k = F.normalize(k, dim=-1, eps=1e-6)
+
+        # Atenção cruzada entre canais.
+        attention = (
+            q @ k.transpose(-2, -1)
+        ) * self.temperature
+
+        attention = attention.softmax(dim=-1)
+
+        # Seleção e combinação das features.
+        out = attention @ v
+
+        out = out.reshape(b, c, h, w)
+
+        return self.project_out(out)
+    
+class CrossBranchFusion(nn.Module):
+
+    def __init__(
+        self,
+        channels,
+        scale=0.2,
+        num_heads=4,
+        bias=False,
+        layernorm_type="WithBias"
+    ):
+        super().__init__()
+
         self.scale = float(scale)
-        # Intensidade -> cor
+
+        # ==========================================
+        # Fusão convolucional original
+        # ==========================================
+
         self.intensity_to_color = nn.Conv2d(
             channels,
             channels,
             kernel_size=1
         )
-        # Cor -> intensidade
+
         self.color_to_intensity = nn.Conv2d(
             channels,
             channels,
             kernel_size=1
         )
-        # A interação começa desligada
-        nn.init.zeros_(
-            self.intensity_to_color.weight
+
+        nn.init.zeros_(self.intensity_to_color.weight)
+        nn.init.zeros_(self.intensity_to_color.bias)
+
+        nn.init.zeros_(self.color_to_intensity.weight)
+        nn.init.zeros_(self.color_to_intensity.bias)
+
+        # ==========================================
+        # Normalização dos dois ramos
+        # ==========================================
+
+        self.norm_color = LayerNorm2D(
+            channels,
+            layernorm_type
         )
-        nn.init.zeros_(
-            self.intensity_to_color.bias
+
+        self.norm_intensity = LayerNorm2D(
+            channels,
+            layernorm_type
         )
-        nn.init.zeros_(
-            self.color_to_intensity.weight
+
+        # ==========================================
+        # Atenção cruzada bidirecional
+        # ==========================================
+
+        self.attn_i_to_c = CrossChannelAttention(
+            channels=channels,
+            num_heads=num_heads,
+            bias=bias
         )
-        nn.init.zeros_(
-            self.color_to_intensity.bias
+
+        self.attn_c_to_i = CrossChannelAttention(
+            channels=channels,
+            num_heads=num_heads,
+            bias=bias
         )
 
     def forward(
@@ -397,30 +542,50 @@ class CrossBranchFusion(nn.Module):
         intensity_feat
     ):
 
-        # Intensidade influencia cor
-        color_update = (
-            self.intensity_to_color(
-                intensity_feat
-            )
-        )
-
-        # Cor influencia intensidade
-        intensity_update = (
-            self.color_to_intensity(
-                color_feat
-            )
-        )
-
-        color_feat = (color_feat + self.scale * color_update)
-
-        intensity_feat = (intensity_feat + self.scale * intensity_update)
-
-        return (
-            color_feat,
+        # 1. Fusão convolucional original.
+        color_update = self.intensity_to_color(
             intensity_feat
         )
 
+        intensity_update = self.color_to_intensity(
+            color_feat
+        )
 
+        # 2. Normalização das features.
+        color_norm = self.norm_color(
+            color_feat
+        )
+
+        intensity_norm = self.norm_intensity(
+            intensity_feat
+        )
+
+        # 3. Intensidade orienta a cromaticidade.
+        color_attention = self.attn_i_to_c(
+            target=color_norm,
+            source=intensity_norm
+        )
+
+        # 4. Cromaticidade orienta a intensidade.
+        intensity_attention = self.attn_c_to_i(
+            target=intensity_norm,
+            source=color_norm
+        )
+
+        # 5. Fusão residual dos dois mecanismos.
+        color_out = (
+            color_feat
+            + self.scale * color_update
+            + self.scale * color_attention
+        )
+
+        intensity_out = (
+            intensity_feat
+            + self.scale * intensity_update
+            + self.scale * intensity_attention
+        )
+
+        return color_out, intensity_out  
 
 
 # Fusao controlada entre os ramos de cor e intensidade.
@@ -599,16 +764,15 @@ class LCWHVINet(nn.Module):
         ])
 
         # Troca controlada de informacao entre cor e intensidade.
-        self.cross_fusion = CrossBranchFusion(channels, scale=0.2)
+        self.cross_fusion = CrossBranchFusion(
+            channels=channels,
+            scale=0.2,
+            num_heads=num_heads,
+            bias=bias,
+            layernorm_type=layernorm_type
+            )
 
-        # A cabeca de intensidade preve uma curva escalar por pixel.
-        # self.intensity_head = nn.Sequential(
-        #     nn.Conv2d(channels, channels, 3, padding=1, bias=bias),
-        #     nn.PReLU(num_parameters=channels),
-        #     nn.Conv2d(channels, 1, 3, padding=1, bias=True),
-        # )
-        
-        
+  
         self.intensity_head = nn.Sequential(
             nn.Conv2d(channels,channels,3,padding=1,bias=bias),
             nn.PReLU(num_parameters=channels),
