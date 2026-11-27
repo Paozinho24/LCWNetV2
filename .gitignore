@@ -27,6 +27,9 @@ train_log.csv
 # Logs do SLURM
 *.out
 *.err
+__pycache__/
+*.pyc
+*.pyo
 
 # Imagens geradas pela inferência
 *_LCWHVI.png
